@@ -4,7 +4,29 @@
 
 ## ⚠️ 改代码前务必先读：踩过的坑
 
-1. **profile bundle 必须声明 `dsh.bundle.patch`**（指向 `cordis.patch.yml`）。缺了它 dsh 启动即报
+0. **服务改名会让座位"静默消失"，必须注入新旧两个名字。**
+   DSH 0.1.7 把客户端设置镜像服务从 `settingsScope` 改名为 `configForms`（由 `@deepseek-ai/dsh-client-ui-settings` 提供，`describe()` 返回的还是同一个 mirror 对象）。
+   cordis 的 `ctx.inject([...])` **只要有一个服务永不出现，回调就永远不执行** —— 不报错、不打日志。所以 0.1.7 一升级，本插件的设置页浮窗就凭空消失了（输入框的模型菜单照常，因为它注入的 `slots/modelDirectories/sessions` 都没变）。
+   现在 `apply()` 里同时注入两个名字，用一次性标志保证只挂载一次：
+   ```js
+   ctx.inject(["slots", "configForms", "remote", "remote.settings"], (s) => mountOrderPanel(s, s.configForms.describe()));
+   ctx.inject(["slots", "settingsScope", "remote", "remote.settings"], (s) => mountOrderPanel(s, s.settingsScope.describe()));
+   ```
+   **推论**：升级 DSH 后如果某个座位不见了，第一件事是去新版本的 `dsh-client-ui-*` 包里 grep 自己注入的每个服务名。
+
+1. **`file:` 依赖是打包快照，`link:` 才是符号链接 —— 改仓库可能根本不生效。**
+   profile 里写 `"dsh-model-organizer": "file:../../../dsh-model-organizer"` 时，pnpm 把目录**打包复制**进自己的 store；只有 `pnpm add ./dir`（直接路径）或 `link:` 才是符号链接。
+   症状：改完仓库代码、强刷浏览器，界面毫无变化；查 `window.__dshModelOrganizerBuild` 会发现跑的还是旧构建号，而服务端 bundle 里明明是新代码 —— 因为 DSH 加载的是 `profiles/<p>/node_modules/dsh-model-organizer/lib/client.js` 那份**副本**。
+   排查：直接 grep 那份副本的 `BUILD` 常量，和仓库对比。
+   修法：`dsh plugin --profile web remove dsh-model-organizer && dsh plugin --profile web add link:./dsh-model-organizer`（换成符号链接后只改一处）。在此之前必须**两份同步改**。
+
+2. **0.1.7 的菜单色 token 是半透明的，浮层必须配 `backdrop-filter`。**
+   `--dsw-specific-menu` 现在解析成 `rgba(48,49,54,0.5)`，官方菜单靠 `backdrop-filter: var(--dsw-menu-backdrop-filter)` 配合。只取颜色不取模糊 → 面板是「透视」的，底下的官方卡片按钮直接透上来。
+
+3. **浮层要 `ReactDOM.createPortal` 到 `document.body`。**
+   `settings.models.footer` 座位在设置页很深的子树里，`position: fixed` 会被困在那个子树的堆叠上下文里，被别的插件的悬浮组件（鲸鱼、地球图标等）盖住 —— 提高 z-index 也没用。挂到 body 之后 z-index 才是全局的（本插件用 10000，官方菜单是 1100）。
+
+4. **profile bundle 必须声明 `dsh.bundle.patch`**（指向 `cordis.patch.yml`）。缺了它 dsh 启动即报
    `profile bundle "..." declares no dsh.bundle in its package.json`。
 
 2. **顶层 `inject` 必须声明座位 standardProps 会读取的每一个服务**（本插件：`locale, slots, sessions, remote, remote.session, remote.settings`）。
