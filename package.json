@@ -1,0 +1,57 @@
+{
+  "name": "dsh-model-organizer",
+  "version": "0.3.2",
+  "description": "DSH 模型整理插件：输入框的模型下拉改为「供应商分组 + 模型二级折叠菜单」（含推理等级），并在模型设置页提供一个可拖拽的「供应商与模型顺序」浮窗。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "DEVELOPING.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "model",
+    "model-selector",
+    "reasoning-effort",
+    "drag-and-drop"
+  ],
+  "license": "MIT",
+  "author": "NimoXie",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NimoXie15/dsh-model-organizer.git"
+  },
+  "homepage": "https://github.com/NimoXie15/dsh-model-organizer#readme",
+  "bugs": {
+    "url": "https://github.com/NimoXie15/dsh-model-organizer/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings-models",
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  }
+}
