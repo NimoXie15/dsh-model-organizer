@@ -14,3 +14,7 @@ node_modules/
 # npm credentials — never commit a token
 .npmrc
 *.tgz
+
+# local screenshots — they show real provider names, keep them out of the repo
+docs/
+*.png
