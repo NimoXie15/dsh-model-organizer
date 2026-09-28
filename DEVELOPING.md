@@ -1,130 +1,63 @@
 # 开发笔记
 
-面向改这个插件的人（包括未来的我）。用户文档在 [README.md](./README.md)。
+面向改这个插件的人。用户文档在 [README.md](./README.md)。
 
-## ⚠️ 改代码前务必先读：踩过的坑
+## 升级 DSH 后座位凭空消失？先查服务名
 
-0. **服务改名会让座位"静默消失"，必须注入新旧两个名字。**
-   DSH 0.1.7 把客户端设置镜像服务从 `settingsScope` 改名为 `configForms`（由 `@deepseek-ai/dsh-client-ui-settings` 提供，`describe()` 返回的还是同一个 mirror 对象）。
-   cordis 的 `ctx.inject([...])` **只要有一个服务永不出现，回调就永远不执行** —— 不报错、不打日志。所以 0.1.7 一升级，本插件的设置页浮窗就凭空消失了（输入框的模型菜单照常，因为它注入的 `slots/modelDirectories/sessions` 都没变）。
-   现在 `apply()` 里同时注入两个名字，用一次性标志保证只挂载一次：
-   ```js
-   ctx.inject(["slots", "configForms", "remote", "remote.settings"], (s) => mountOrderPanel(s, s.configForms.describe()));
-   ctx.inject(["slots", "settingsScope", "remote", "remote.settings"], (s) => mountOrderPanel(s, s.settingsScope.describe()));
-   ```
-   **推论**：升级 DSH 后如果某个座位不见了，第一件事是去新版本的 `dsh-client-ui-*` 包里 grep 自己注入的每个服务名。
+cordis 的 `ctx.inject([...])` **只要有一个服务永不出现，回调就永远不执行** —— 不报错、不打日志。所以服务改名会让整个座位静默消失。
 
-1. **`file:` 依赖是打包快照，`link:` 才是符号链接 —— 改仓库可能根本不生效。**
-   profile 里写 `"dsh-model-organizer": "file:../../../dsh-model-organizer"` 时，pnpm 把目录**打包复制**进自己的 store；只有 `pnpm add ./dir`（直接路径）或 `link:` 才是符号链接。
-   症状：改完仓库代码、强刷浏览器，界面毫无变化；查 `window.__dshModelOrganizerBuild` 会发现跑的还是旧构建号，而服务端 bundle 里明明是新代码 —— 因为 DSH 加载的是 `profiles/<p>/node_modules/dsh-model-organizer/lib/client.js` 那份**副本**。
-   排查：直接 grep 那份副本的 `BUILD` 常量，和仓库对比。
-   修法：`dsh plugin --profile web remove dsh-model-organizer && dsh plugin --profile web add link:./dsh-model-organizer`（换成符号链接后只改一处）。在此之前必须**两份同步改**。
+已发生一次：0.1.7 把客户端设置镜像服务 `settingsScope` 改名为 `configForms`（提供者仍是 `@deepseek-ai/dsh-client-ui-settings`，`describe()` 返回同一个 mirror）。设置页浮窗因此消失，而输入框菜单照常（它注入的 `slots/modelDirectories/sessions` 没变）。
 
-2. **0.1.7 的菜单色 token 是半透明的，浮层必须配 `backdrop-filter`。**
-   `--dsw-specific-menu` 现在解析成 `rgba(48,49,54,0.5)`，官方菜单靠 `backdrop-filter: var(--dsw-menu-backdrop-filter)` 配合。只取颜色不取模糊 → 面板是「透视」的，底下的官方卡片按钮直接透上来。
+`apply()` 里同时注入两个名字，一次性标志保证只挂载一次：
 
-3. **浮层要 `ReactDOM.createPortal` 到 `document.body`。**
-   `settings.models.footer` 座位在设置页很深的子树里，`position: fixed` 会被困在那个子树的堆叠上下文里，被别的插件的悬浮组件（鲸鱼、地球图标等）盖住 —— 提高 z-index 也没用。挂到 body 之后 z-index 才是全局的（本插件用 10000，官方菜单是 1100）。
-
-4. **profile bundle 必须声明 `dsh.bundle.patch`**（指向 `cordis.patch.yml`）。缺了它 dsh 启动即报
-   `profile bundle "..." declares no dsh.bundle in its package.json`。
-
-2. **顶层 `inject` 必须声明座位 standardProps 会读取的每一个服务**（本插件：`locale, slots, sessions, remote, remote.session, remote.settings`）。
-   少一个 → 渲染时抛 `cannot get property "remote.session" without inject` → **条目被静默弃权（abdicate）并回退到内置 UI**，界面无任何报错。
-   调用 `remote.settings.mutate` 还必须显式声明 **`remote.settings`**。
-
-3. **owner props 以组件 props 传入，不经过座位的 `inject` 工厂**：`settings.models.provider-card` 的 `inject` 不接收参数，必须读 `props.provider`。
-
-4. **`single` 座位优先级**：同优先级注册会**直接抛错**；运行时为非 chain 座位**自动分配**优先级（`--nextPriority` 递减），**后注册者胜出**。
-
-5. **drop 事件会在行与容器上各触发一次**（冒泡），需用 ref 加锁，否则重复写入。
-
-6. **边框必须用 longhand**（`borderWidth/borderStyle/borderColor`）。用 shorthand `border` 再叠加 `borderColor` 时，React 会把 shorthand 展开成 longhand；回退时移除 `borderColor`，`border-color` 就落回 **currentColor** —— 表现为「拖拽结束后高亮边框一直不消失」。
-
-7. **拖拽会把源行留在焦点上**。行加 `tabIndex:-1`、drop/dragend 时 `blur()`；并且**不要给行画 `:focus-visible` 背景**（官方 `option` 类自带一条，会变成「拖完还留一块灰底」）。
-
-8. **原生拖拽会让文字变成可拖对象**（浏览器弹「松开鼠标即可搜索」）。解决：`-webkit-user-drag:none` 加在**行的内容**上，不要加在行本身（加在行上会让行也拖不动）。这条是从侧边栏会话行的实现里学来的。
-
-9. **primitive 图标不转发 inline `style`**：需要旋转/变色请传 `className`（本插件为此注入一张极小的自有样式表）。
-
-10. **数组顺序可控，record 键顺序不可控**：`providers` 是 record，宿主要规范化键顺序，整体 `set` 与 `unset`+`set` 都实测无效 —— 所以供应商顺序只能存本机偏好。
-
-11. **面板里用到的每个局部变量都要真的声明**：曾在 `ProviderModelOrder` 里用了 `C`（官方类名映射）却没定义 → `ReferenceError` → 条目再次被静默弃权，表现为「面板整个不见了」。
-
-12. 浏览器半只需 `react` / `react-dom` / `@deepseek-ai/dsh-client-ui-primitives`（都在 shell 的 PLATFORM_MODULES 种子里），无需 `dsh.client.external`。
-
-## 兼容性与鲁棒性（已核查）
-
-### 已发现并修复的真实冲突
-
-**`settings.models.provider-card` 被 `@linxin666/dsh-client-ui-model-capabilities` 占用。**
-该座位是 **keyed**，key 由官方页面固定派发为供应商的 settings namespace（`llm-pi-ai`）；而该插件已经用同一个 key 注册了「模型能力」面板。SlotCore 对 keyed 座位**一个 key 只保留一个占用者**，且同 key 同优先级会直接抛错 —— 它用 `try/catch` 吞掉异常，所以**本插件早期版本一直在静默压制它的「模型能力」面板**（实测：让出该座位后，每个供应商卡片立刻出现「模型能力」）。
-
-**修复**：本插件不再占用该座位，模型排序改由自己拥有的 `settings.models.footer`（list 座位，`id: model-organizer-provider-order`）承载 —— list 座位按 id 去重，天然可与该插件的 `ui-model-capabilities` 共存。
-
-### 其它已做的加固
-
-| 风险 | 处理 |
-| :-- | :-- |
-| 官方 CSS module 哈希变化 / 被别的模块误命中 | 运行时解析前缀，并用**只有该模块才有的第二个类**（`_optionCopy`）校验；缓存与样式表数量绑定；全部失败则退回内置回退样式 |
-| 座位契约变更（prop 改名等） | **不拦截**：让渲染抛错 → SlotCore 弃权该条目 → 官方内置组件自动回填 |
-| 座位被重命名 / 移除 | `slots.inject` 永不触发 → 对应面板静默消失，其它功能不受影响 |
-| 单个座位注册失败 | 每个座位注册独立 `guard`，失败只记一条 warn，**不会拖垮整个插件** |
-| 写入被拒绝 / ops 契约变化 | `mutate` 的同步抛错与 promise 拒绝都有捕获，并在表头显示失败原因 |
-| 本机偏好 | `localStorage` key 带命名空间，读写都有 try/catch |
-| 注入的样式表 | `<style id="dsh-model-organizer-style">`，类名统一 `dsh-mo-*` 前缀，注入幂等 |
-| 服务端半边 | 只有空 `apply()`，不注册任何宿主能力 |
-
-### 仍然存在的风险（无法在插件侧消除）
-
-- **`conversation.input.model` 是 single 座位**：将来若另一个插件以相同优先级注册，SlotCore 会抛错（本插件的 `guard` 会记 warn，官方内置组件仍会渲染）。
-- **官方模型页若改变 keyed 派发约定**，依赖该座位的插件会失效 —— 本插件已不依赖它。
-- **官方 CSS module 若改名**（例如删掉 `optionCopy`），校验会失败并退回回退样式：功能可用、外观降级。
-- **卡片排序**是本插件唯一会改官方 DOM 的地方（给官方列表设 `display:flex` + 给 `li` 设 CSS `order`，不移动节点）。若 DSH 改那棵 DOM，该功能会静默降级，其余功能不受影响。
-
-## 排查手册
-
-### 让 agent 浏览器不显示窗口（消除抢焦点）
-
-`dsh-ego-browser` 驱动的 Chromium 是 DSH 的子进程，默认以真实窗口存在，并且**每次动作工具都会 `Target.activateTarget` 把它顶到前台**（这就是「用着用着 Chrome 跳出来」的原因）。让它完全不出现窗口：
-
-```powershell
-# 只对当前终端会话生效（先这样试）
-$env:EGO_LINUX_HEADLESS = 1
-dsh web
-
-# 永久生效（设完必须重开终端，再启动 DSH）
-setx EGO_LINUX_HEADLESS 1
+```js
+ctx.inject(["slots", "configForms", "remote", "remote.settings"], (s) => mountOrderPanel(s, s.configForms.describe()));
+ctx.inject(["slots", "settingsScope", "remote", "remote.settings"], (s) => mountOrderPanel(s, s.settingsScope.describe()));
 ```
 
-- 显式设置 `1/true/yes/on` **优先于**「有没有显示环境」的自动推断（含 Windows）。
-- 浏览器是**单例常驻**进程：改完要重启 DSH（或 `ego-browser --stop`）才冷启动生效。
-- **代价**：只损失「实时观察窗」；其余 `ego_*` 工具（导航/点击/输入/JS/截图/下载）全部照常。
-- 不要用 `chromeArgs` 传 `--headless` —— 它在 `CHROME_BLOCKED` 黑名单里，会被过滤掉。
+**规律**：升级后座位不见了，第一件事是去新版 `dsh-client-ui-*` 包里 grep 自己注入的每个服务名。
 
-### 改了插件代码但界面没变化
+## 座位的失败模式（决定了代码结构）
 
-DSH 把客户端 bundle 以 `Cache-Control: public, max-age=31536000, immutable` 下发，而 URL 不随代码变化 —— 普通刷新会一直用缓存。**必须 Ctrl+Shift+R**（或在 DevTools → Network 勾 Disable cache）。
+- **条目渲染时抛错 → 被静默弃权，官方内置 UI 自动回填**，界面上没有任何提示。
+- **座位注册本身失败 → 该座位静默消失**，其它功能不受影响。
+- 所以：每个座位注册各套一层 `guard`（失败只记 warn，不拖垮插件）；组件外套 `PanelBoundary`（把抛错变成页面上的一行红字，而不是"凭空消失"）。
+- **顶层 `inject` 必须列全座位 standardProps 会读的每个服务**（本插件：`locale, slots, sessions, remote, remote.session, remote.settings`）。少一个 → 渲染抛 `cannot get property "..." without inject` → 弃权。用 `remote.settings.mutate` 必须显式声明 `remote.settings`。
+- `single` 座位同优先级注册会**直接抛错**；运行时会为非 chain 座位自动分配优先级，后注册者胜出。
+- 未声明的局部变量（`ReferenceError`）同样会导致弃权，表现就是"整个面板不见了"。
 
-## 发版流程
+## 与官方模块的耦合
+
+- **官方 CSS-module 类名靠运行时解析**：锚定只有该模块才有的类名，并用第二个类名（如 `_optionCopy`）校验；解析失败退回内置回退样式（功能可用、外观降级）。
+- **0.1.7-rc.1 的构建丢了官方菜单规则的两条属性**：线上生效的 `_7KE1Ra_menu` 里既没有 `background` 也没有 `border-radius`（源码里是 `var(--dsw-specific-menu)` 和 `16px`），所以**官方菜单本身表现为全透明+直角**。本插件不依赖那条规则：运行时从 `document.body` 解析 `--dsw-specific-menu` 内联补上背景，并补 `var(--dsw-radius-lg)` 圆角。升级后可重新检查这条规则是否已修复。
+- **浮层必须 `ReactDOM.createPortal` 到 `document.body`**：座位在设置页很深的子树里，`position: fixed` 会被困在那个子树的堆叠上下文，被别的插件的悬浮组件盖住 —— 提高 z-index 也没用。
+- **不要占用 `settings.models.provider-card`**：它是 keyed 座位，key 是供应商的 settings namespace，已被 `@linxin666/dsh-client-ui-model-capabilities` 占用；keyed 座位一个 key 只留一个占用者，同 key 同优先级注册会抛错（而且对方用 try/catch 吞掉，等于静默压制它）。本插件只用自己的 `settings.models.footer`（list 座位，按 id 去重）。
+
+## 开发环境
+
+- **`file:` 依赖是打包快照，`link:` 才是符号链接。** profile 里写 `"file:../../../dsh-model-organizer"` 时 pnpm 把目录打包**复制**进 store，DSH 加载的是 `profiles/<p>/node_modules/.../lib/client.js` 那份副本 —— 改仓库**不生效**。
+  排查：grep 那份副本的 `BUILD` 常量，和仓库对比。
+  修法：`dsh plugin --profile web remove dsh-model-organizer && dsh plugin --profile web add link:./dsh-model-organizer`
+- **改完要 Ctrl+Shift+R**：客户端 bundle 以 `Cache-Control: immutable, max-age=31536000` 下发，且 URL 不随代码变化，普通刷新一直用缓存。
+- **浏览器半只需 `react` / `react-dom` / `@deepseek-ai/dsh-client-ui-primitives`**（都在 shell 的 PLATFORM_MODULES 种子里），不需要 `dsh.client.external`。
+- profile bundle 必须声明 `dsh.bundle.patch`（指向 `cordis.patch.yml`），否则 dsh 启动即报 `declares no dsh.bundle`。
+
+## 写 UI 时踩过的坑
+
+- **边框必须用 longhand**（`borderWidth/borderStyle/borderColor`）。用 shorthand `border` 再叠加 `borderColor` 时 React 会展开 shorthand；回退时移除 `borderColor`，`border-color` 落回 `currentColor` → "拖拽结束后高亮边框一直不消失"。
+- **拖拽会把源行留在焦点上**：行加 `tabIndex:-1`，drop/dragend 时 `blur()`；并且不要给行画 `:focus-visible` 背景（官方 `option` 类自带一条 → "拖完还留一块灰底"）。
+- **原生拖拽会让文字变成可拖对象**（浏览器弹「松开鼠标即可搜索」）：`-webkit-user-drag:none` 加在**行的内容**上，不要加在行本身（加在行上会让行也拖不动）。
+- **drop 会在行与容器上各触发一次**（冒泡），需加锁，否则重复写入。
+- **primitive 图标不转发 inline `style`**：需要旋转/变色请传 `className`。
+- **`providers` 是 record，键顺序由宿主规范化**：整体 `set` 与 `unset`+`set` 都实测无效，所以供应商顺序只能存 `localStorage`（模型顺序是数组，可以写进文档）。
+
+## 发版
 
 ```sh
-# 1. 改代码后升版本号（npm 不允许覆盖已发布的版本）
-#    package.json 的 version：0.3.2 → 0.3.3
-# 2. 提交并推送
+# npm 不允许覆盖已发布的版本号：先升版本，再提交，最后发布
+npm version patch        # 或手改 package.json 的 version
 git add -A && git commit -m "..." && git push
-# 3. 发布
 npm publish
 ```
 
-发布需要带 **Bypass 2FA** 的 Granular Access Token（npm 2025-11 起只支持 granular token）。配置方式：
-npmjs.com → 头像 → Access Tokens → Generate New Token → Packages 选 **All Packages + Read and write (publish and stage)**、**Organizations 选 No access**、勾 **Bypass two-factor authentication**；然后
-`npm config set //registry.npmjs.org/:_authToken=npm_xxx`（写进用户级 `.npmrc`，不要放进仓库）。
-
-## 附：关于「(modlens vision)」供应商分组
-
-这些是 **`@liustack/modlens` 自动生成的「视觉变体」路由**，不是配置重复项：
-
-- 机制：modlens 扫描已注册 provider，找出上游元数据声明为 `text` 且不含 image 的模型（默认按 `deepseek` / `glm` / `mimo` 前缀族匹配），为它们注册一条**声明支持图片输入**的伴随路由，界面名加 `(modlens vision)`。
-- 用途：选中该分组下的模型后，粘贴/拖拽图片会走 DSH 原生附件流程，在调用（纯文本）模型前把图片转成证据文本。不选这个分组时，纯文本模型无法接收图片。
-- 调整：编辑 `$DSH_HOME/profiles/<profile>/cordis.patch.yml` 里的 `modlens` 配置（`families` / `discover`），整条关掉用 `visionProvider: false`。视觉引擎配置在 `~/.modlens/config.json`。
+发布需要带 **Bypass 2FA** 的 Granular Access Token（npm 2025-11 起只支持 granular token）：npmjs.com → 头像 → Access Tokens → Generate New Token → Packages 选 **All Packages + Read and write (publish and stage)**、**Organizations 选 No access**、勾 **Bypass two-factor authentication**；然后 `npm config set //registry.npmjs.org/:_authToken=npm_xxx`（写进用户级 `.npmrc`，不要放进仓库）。

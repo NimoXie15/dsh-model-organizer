@@ -36,9 +36,9 @@ dsh plugin --profile web add github:NimoXie15/dsh-model-organizer
 dsh plugin --profile web add link:/absolute/path/to/dsh-model-organizer
 ```
 
-> **兼容性**：已在 DSH `0.1.7-rc.1` 上验证，同时兼容 `0.1.5`/`0.1.6`（0.1.7 把客户端设置镜像服务从 `settingsScope` 改名为 `configForms`，本插件两个名字都注入，所以两个版本都能用）。
+> **兼容性**：已在 DSH `0.1.7` 上实测，`0.1.5` 起都可用（0.1.7 调整了一处内部接口，本插件已做兼容处理）。
 >
-> 升级插件后如果界面没变化，按 **Ctrl+Shift+R** 强刷一次（DSH 的客户端 bundle 带一年 immutable 缓存，普通刷新不会重新下载）。
+> 升级插件后如果界面没变化，按 **Ctrl+Shift+R** 强刷一次（浏览器可能还在用缓存的旧版本）。
 
 ## 截图
 
@@ -58,9 +58,9 @@ dsh plugin --profile web add link:/absolute/path/to/dsh-model-organizer
 
 ## 已知限制
 
-- 只处理 `llm-pi-ai` 命名空间下的供应商（DeepSeek 官方供应商不在其中）
-- 供应商顺序、浮窗位置是本机偏好，不跨设备同步
-- 只占用两个官方扩展点（`conversation.input.model`、`settings.models.footer`），不改官方代码
+- 只对「设置 → 模型」里自己添加的供应商生效，**DeepSeek 官方供应商不在其中**
+- 供应商顺序、浮窗位置只保存在本机浏览器，不跨设备同步；模型顺序写在设置里，会跟着走
+- 不修改 DSH 本体，只通过官方提供的扩展点接入
 
 ## 许可
 
@@ -68,4 +68,4 @@ MIT
 
 ---
 
-开发笔记、兼容性审计、排查手册见 [DEVELOPING.md](./DEVELOPING.md)。
+想自己改这个插件、或者想了解它内部怎么实现的，见 [DEVELOPING.md](./DEVELOPING.md)。
