@@ -23,13 +23,15 @@ ctx.inject(["slots", "settingsScope", "remote", "remote.settings"], (s) => mount
 - **座位注册本身失败 → 该座位静默消失**，其它功能不受影响。
 - 所以：每个座位注册各套一层 `guard`（失败只记 warn，不拖垮插件）；组件外套 `PanelBoundary`（把抛错变成页面上的一行红字，而不是"凭空消失"）。
 - **顶层 `inject` 必须列全座位 standardProps 会读的每个服务**（本插件：`locale, slots, sessions, remote, remote.session, remote.settings`）。少一个 → 渲染抛 `cannot get property "..." without inject` → 弃权。用 `remote.settings.mutate` 必须显式声明 `remote.settings`。
-- `single` 座位同优先级注册会**直接抛错**；运行时会为非 chain 座位自动分配优先级，后注册者胜出。
+- `single` 座位在**同一优先级已有注册**时会直接抛错。不写 `priority` 时，运行时会为非 chain 座位自动分配一个唯一的优先级（后注册的更低，渲染时胜出），所以只有显式写了撞车的 `priority` 才会抛。
 - 未声明的局部变量（`ReferenceError`）同样会导致弃权，表现就是"整个面板不见了"。
 
 ## 与官方模块的耦合
 
 - **官方 CSS-module 类名靠运行时解析**：锚定只有该模块才有的类名，并用第二个类名（如 `_optionCopy`）校验；解析失败退回内置回退样式（功能可用、外观降级）。
-- **0.1.7-rc.1 的构建丢了官方菜单规则的两条属性**：线上生效的 `_7KE1Ra_menu` 里既没有 `background` 也没有 `border-radius`（源码里是 `var(--dsw-specific-menu)` 和 `16px`），所以**官方菜单本身表现为全透明+直角**。本插件不依赖那条规则：运行时从 `document.body` 解析 `--dsw-specific-menu` 内联补上背景，并补 `var(--dsw-radius-lg)` 圆角。升级后可重新检查这条规则是否已修复。
+- **官方菜单规则长期缺 `background` 和 `border-radius`**：0.1.7-rc.1 的构建把这两条属性丢了（源码里是 `var(--dsw-specific-menu)` 和 `16px`），0.2.0-rc.1 依旧如此、类名 hash 还是 `_7KE1Ra`，官方菜单本身仍是全透明+直角。本插件不依赖那条规则：运行时从 `document.body` 解析 `--dsw-specific-menu` 内联补上背景，并补 `var(--dsw-radius-lg)` 圆角。
+- **0.2.0 起 `--dsw-specific-menu` 变成半透明**（=`--dsw-menu-surface-fill`，浅色 `#f8f9fa94` / 深色 `#43454a73`）——官方菜单皮肤本就是半透明设计，插件跟随该 token，模型菜单也随之通透。要恢复实心背景只能绕开这个 token。
+- **0.2.0-rc.1 核验记录**：`configForms` 仍在、`settingsScope` 已彻底移除（`apply()` 里双注入两个名字的写法继续有效）；`settings.models.footer` 与 `conversation.input.model` 两个座位均未改名；官方 CSS hash 未变，运行时类名解析不用改。
 - **浮层必须 `ReactDOM.createPortal` 到 `document.body`**：座位在设置页很深的子树里，`position: fixed` 会被困在那个子树的堆叠上下文，被别的插件的悬浮组件盖住 —— 提高 z-index 也没用。
 - **不要占用 `settings.models.provider-card`**：它是 keyed 座位，key 是供应商的 settings namespace，已被 `@linxin666/dsh-client-ui-model-capabilities` 占用；keyed 座位一个 key 只留一个占用者，同 key 同优先级注册会抛错（而且对方用 try/catch 吞掉，等于静默压制它）。本插件只用自己的 `settings.models.footer`（list 座位，按 id 去重）。
 
@@ -39,7 +41,7 @@ ctx.inject(["slots", "settingsScope", "remote", "remote.settings"], (s) => mount
   排查：grep 那份副本的 `BUILD` 常量，和仓库对比。
   修法：`dsh plugin --profile web remove dsh-model-organizer && dsh plugin --profile web add link:./dsh-model-organizer`
 - **改完要 Ctrl+Shift+R**：客户端 bundle 以 `Cache-Control: immutable, max-age=31536000` 下发，且 URL 不随代码变化，普通刷新一直用缓存。
-- **浏览器半只需 `react` / `react-dom` / `@deepseek-ai/dsh-client-ui-primitives`**（都在 shell 的 PLATFORM_MODULES 种子里），不需要 `dsh.client.external`。
+- **浏览器侧（`lib/client.js`）只需 `react` / `react-dom` / `@deepseek-ai/dsh-client-ui-primitives`**——三者都是 shell 内置提供给插件的模块（PLATFORM_MODULES），所以 `dsh.client` 里不需要 `external` 声明。
 - profile bundle 必须声明 `dsh.bundle.patch`（指向 `cordis.patch.yml`），否则 dsh 启动即报 `declares no dsh.bundle`。
 
 ## 写 UI 时踩过的坑
