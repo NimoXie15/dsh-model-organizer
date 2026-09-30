@@ -10,7 +10,7 @@
 
 **输入框的模型菜单**
 - 根层与官方一致：「模型」「推理等级」两个入口——「推理等级」**常驻**，未配置等级的模型上置灰、不可点
-- 「模型」里保留本插件的改进：按供应商分组、可折叠，顺序与设置页浮窗一致，当前模型打 ✓
+- 「模型」里保留本插件的改进：按供应商分组、可折叠，顺序与设置页浮窗一致，当前模型字体加粗高亮
 - 模型多于 4 个时，「模型」层顶部有官方同款的「搜索模型」框（0.2.0-rc.2 起官方才有此样式，旧版自动隐藏）
 - 外观完全沿用官方样式（同一个菜单表面、同一套图标，含官方的毛玻璃背景）
 
@@ -20,21 +20,26 @@
 
 ## 安装
 
+`<profile>` 是你的目标环境：浏览器版用 `web`，桌面客户端用 `desktop`。
+
 ```sh
-dsh plugin --profile web add @nimoxie/dsh-model-organizer
+dsh plugin --profile <profile> add @nimoxie/dsh-model-organizer
 ```
 
-装完重启 web 服务（关掉再 `dsh web`）。卸载：
+- 浏览器版（`web`）：装完重启服务（关掉再 `dsh web`）。
+- 桌面客户端（`desktop`）：桌面 profile 由客户端独占管理，请在客户端的「插件管理」页添加本包（包名 `@nimoxie/dsh-model-organizer`）。
+
+卸载（CLI 可管理的环境）：
 
 ```sh
-dsh plugin --profile web remove @nimoxie/dsh-model-organizer
+dsh plugin --profile <profile> remove @nimoxie/dsh-model-organizer
 ```
 
-也可以从 GitHub 或本地目录装：
+也可以从 GitHub 或本地目录装（开发用）：
 
 ```sh
-dsh plugin --profile web add github:NimoXie15/dsh-model-organizer
-dsh plugin --profile web add link:/absolute/path/to/dsh-model-organizer
+dsh plugin --profile <profile> add github:NimoXie15/dsh-model-organizer
+dsh plugin --profile <profile> add link:/absolute/path/to/dsh-model-organizer
 ```
 
 > **兼容性**：已在 DSH `0.1.7`、`0.2.0-rc.1`（web）、`0.2.0-rc.2`（桌面端）上核验，`0.1.5` 起都可用。
