@@ -60,7 +60,7 @@ dsh plugin --profile <profile> add link:/absolute/path/to/dsh-model-organizer
 
 ## 已知限制
 
-- 排序浮窗只列「设置 → 模型」里自己添加的供应商，**DeepSeek 官方供应商不能排序**（输入框菜单里照常出现、可选）
+- 排序浮窗只列「设置 → 模型」里自己添加的供应商；**DeepSeek 官方供应商不能排序**，它们在设置页卡片和输入框菜单里都**固定在顶部**，照常出现、可选
 - 供应商顺序、浮窗位置只存在当前浏览器；模型顺序存在 DSH 的用户配置里，同一份 DSH 的所有设备共用——两台机器各装一份 DSH 则互不相通
 - 不修改 DSH 本体，只通过官方提供的扩展点接入
 
@@ -70,4 +70,4 @@ MIT
 
 ---
 
-想自己改这个插件、或者想了解它内部怎么实现的，见 [DEVELOPING.md](./DEVELOPING.md)。
+想自己改这个插件、或者想了解它内部怎么实现的，见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
