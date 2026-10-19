@@ -7,11 +7,17 @@
  * three seat registrations still happen, the organizer page renders its three
  * states, and its controls actually write:
  *
- *   - the provider rail and the model list are drag-ordered (handles + DragList),
- *   - Add model / typing / Save model writes models[] through the settings mutation,
- *   - an empty model id is refused before any write,
+ *   - the provider rail and the model list are drag-ordered (the rows ARE the drag
+ *     surface; there is no inline grip any more),
+ *   - built-in routes are listed as read-only rows that hand the Models row back,
+ *   - a model row is one line (dot + name + chips, no inline inputs, no footer Save), and
+ *     a click opens the portaled details dialog,
+ *   - the details dialog's Save writes models[] through ONE settings mutation, and an
+ *     empty model id is refused on the dialog before any write,
+ *   - the fetch picker adopts candidates through that same single write,
  *   - Base URL and protocol write their own fields,
- *   - the API key is written through the credentials service, never read back.
+ *   - the API key is written through the credentials service, never read back,
+ *   - the footer panel keeps its header (and the way back) with < 2 providers.
  *
  *   node test/smoke.mjs        # or npm test
  *
@@ -201,6 +207,9 @@ const scope = {
       listConfigurableProviders: async () => ({
         ok: true,
         value: [
+          /* No settingsPath: a route the shipped catalog owns. The rail must list it
+             read-only, because this page could never edit its settings. */
+          { provider: "deepseek-official", displayName: "DeepSeek 官方", settingsNs: "", declared: true },
           { provider: "hcnsec", displayName: "hcnsec", settingsNs: "llm-pi-ai", settingsPath: ["providers", "hcnsec"], declared: true },
           { provider: "zhipu", displayName: "智谱", settingsNs: "llm-pi-ai", settingsPath: ["providers", "zhipu"], declared: false }
         ]
@@ -274,8 +283,8 @@ function parentOf(node, predicate, current = null) {
 
 /* --------------------------- render helpers ------------------------ */
 const section = () => registrations.filter((row) => row.opts.name === "settings.section").pop();
-function render() {
-  const props = Object.assign({ close: () => {} }, section().opts.inject());
+function render(overrides) {
+  const props = Object.assign({ close: () => {} }, section().opts.inject(), overrides || {});
   const guarded = section().comp(props);
   return resolve(guarded.props.children, "page");
 }
@@ -327,21 +336,50 @@ await tick();          // the provider directory answers on a microtask
 tree = render();
 let text = flattenText(tree).join(" ");
 expect(text.indexOf("新疆幻城") !== -1, "provider rail must list the provider");
-expect(collect(tree, byAttr("page-model-context")).map((node) => node.props.value).join(",") === "1M,200K",
-  "model rows must spell their context windows, got " + collect(tree, byAttr("page-model-context")).map((node) => node.props.value).join(","));
+/* The capacities ride the row's own chip line now; the dialog below is where they are
+   edited. Nothing inline spells them any more. */
+const modelRowText = collect(tree, byAttr("page-model")).map((row) => flattenText(row).join(" "));
+expect(modelRowText.some((line) => line.indexOf("1M") !== -1 && line.indexOf("↑384K") !== -1 && line.indexOf("图片") !== -1),
+  "the first model row must spell context, max tokens and vision, got " + JSON.stringify(modelRowText));
+expect(modelRowText.some((line) => line.indexOf("200K") !== -1), "the second model row must spell its context window");
 expect(text.indexOf("Chat Completions") !== -1, "protocol must be spelled");
 expect(text.indexOf("已配置") !== -1, "key status must render after describe resolves");
 
 /* drag affordances: rail rows carry the HTML5 drag handlers, and the list keeps the
    shipped grab-cursor class the panel already relies on. */
 const railRows = collect(tree, byAttr("page-provider"));
-expect(railRows.length === 3, "rail must render one row per provider, got " + railRows.length);
-const draggableRows = railRows.filter((row) => row.props.draggable === true);
-expect(draggableRows.length === 3, "every rail row must be draggable");
+const officialRows = railRows.filter((row) => row.props["data-mo-official"] === "true");
+const editableRows = railRows.filter((row) => row.props["data-mo-official"] !== "true");
+expect(editableRows.length === 3, "rail must render one editable row per provider, got " + editableRows.length);
+expect(officialRows.length === 1, "the built-in route must render as a read-only rail row, got " + officialRows.length);
+
+/* Built-in routes are read-only: no input anywhere inside, not draggable, and a click
+   hands the Models row back to the shipped page instead of pretending to edit it. */
+const officialRow = officialRows[0];
+expect(officialRow.props["data-mo-id"] === "deepseek-official",
+  "the read-only row must carry its route id, got " + String(officialRow.props["data-mo-id"]));
+expect(officialRow.props.role === "button", "the read-only row must still be a button");
+expect(collect(officialRow, (node) => node.type === "input").length === 0,
+  "the read-only row must not hold an input");
+expect(officialRow.props.draggable !== true && typeof officialRow.props.onDragStart !== "function",
+  "a built-in route must not be draggable: its order is the shipped one");
+expect(String(officialRow.props.title).indexOf("官方模型页") !== -1, "the read-only row must say where it is edited");
+const takeoverCalls = [];
+const officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
+const clickedOfficial = collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-official"] === "true")[0];
+expect(clickedOfficial !== undefined, "the read-only row must survive a render");
+clickedOfficial.props.onClick();
+expect(takeoverCalls.length === 1 && takeoverCalls[0] === false,
+  "clicking a built-in route must hand the row back (setTakeover(false)), got " + JSON.stringify(takeoverCalls));
+expect(collect(clickedOfficial, byAttr("page-provider-dot")).length === 0,
+  "a read-only row keeps the shipped dot, not the plugin's enable dot");
+
+const draggableRows = editableRows.filter((row) => row.props.draggable === true);
+expect(draggableRows.length === 3, "every editable rail row must be draggable");
 /* The regression that mattered: an inline cursor/background on a row beats the shipped
    :hover and the .dsh-mo-list .dsh-mo-head grab rule, so the panel's pointer feedback
    disappears. With a resolved sheet the rows must carry NO inline style at all. */
-const inlineStyled = railRows.filter((row) => row.props.style !== undefined);
+const inlineStyled = editableRows.filter((row) => row.props.style !== undefined);
 expect(inlineStyled.length === 1, "only the current row may carry an inline marker (box-shadow), got " + inlineStyled.length);
 expect(inlineStyled.every((row) => row.props.style.background === undefined && row.props.style.cursor === undefined),
   "row markers must not set an inline background or cursor");
@@ -349,89 +387,198 @@ expect(railRows.every((row) => typeof row.props.className === "string" && row.pr
   "rail rows must keep the shipped cell class together with dsh-mo-head");
 expect(flattenText(tree).join(" ").indexOf("自定义供应商") !== -1, "hand-declared routes must group under 自定义供应商");
 expect(flattenText(tree).join(" ").indexOf("官方目录") !== -1, "catalog routes must group under 官方目录");
-const railHandlers = railRows.every((row) => typeof row.props.onDragStart === "function" && typeof row.props.onDrop === "function" && typeof row.props.onDragOver === "function");
-expect(railHandlers, "rail rows must wire drag start/over/drop");
+expect(flattenText(tree).join(" ").indexOf("官方（内置）" ) !== -1, "built-in routes must group under 官方（内置）");
+const railHandlers = editableRows.every((row) => typeof row.props.onDragStart === "function" && typeof row.props.onDrop === "function" && typeof row.props.onDragOver === "function");
+expect(railHandlers, "editable rail rows must wire drag start/over/drop");
 const grabLists = collect(tree, (node) => typeof node.props.className === "string" && node.props.className.split(/\s+/).indexOf("dsh-mo-list") !== -1);
 expect(grabLists.length >= 2, "drag lists must keep the exact dsh-mo-list class (grab cursor / hover suppression), got " + grabLists.length);
-const handles = collect(tree, byAttr("page-model-handle"));
-expect(handles.length === 2, "each model row needs a drag handle, got " + handles.length);
-expect(handles.every((handle) => handle.props.draggable === true && typeof handle.props.onDragStart === "function"), "model handles must be draggable");
-expect(handles.every((handle) => handle.props.className === "dsh-mo-grip"), "handles must carry the grip class (grab cursor)");
+/* A model row is ONE line now: the ROW is the drag surface (no inline grip) and it opens
+   the details dialog. The inline editor and its footer Save are gone for good. */
+expect(collect(tree, byAttr("page-model-handle")).length === 0, "the inline drag grip must be gone");
+expect(collect(tree, byAttr("page-models-save")).length === 0, "the page footer must no longer carry a Save button");
+for (const marker of ["page-model-id", "page-model-context", "page-model-max", "page-model-vision", "page-model-switch", "page-model-name"]) {
+  expect(collect(tree, byAttr(marker)).length === 0, "the inline field must be gone: " + marker);
+}
 const modelRows = collect(tree, byAttr("page-model"));
-expect(modelRows.length === 2, "model rows must render, got " + modelRows.length);
-expect(modelRows.every((row) => row.props.className === "dsh-mo-pagerow"), "model rows must carry the page-row class (hover tint)");
-expect(modelRows.every((row) => row.props.style === undefined), "model rows must not inline a background that would beat the hover rule");
-/* The screenshot bug: the row kept its class but lost its inline layout, so it became a
-   block and every field stacked. The row class itself must carry the layout now. */
-expect(modelRows.every((row) => Array.isArray(row.props.children) && row.props.children[0].props.style.display === "flex"),
-  "each model row needs a flex id line");
-expect(modelRows.every((row) => Array.isArray(row.props.children) && row.props.children[1].props.style.display === "grid"),
-  "each model row needs a grid field line");
-const fields = modelRows[0].props.children[1];
-expect(String(fields.props.style.gridTemplateColumns).indexOf("92px 92px auto") === 0, "the field line must lay the two capacities out beside the vision toggle");
+expect(modelRows.length === 2, "one row per model — no inline editor and no duplicated list, got " + modelRows.length);
+expect(modelRows.every((row) => row.props.role === "button" && row.props.draggable === true),
+  "each model row must be a clickable, draggable button");
+expect(modelRows.every((row) => typeof row.props.className === "string" && row.props.className.indexOf("dsh-mo-head") !== -1 && row.props.className.indexOf(SHEET_PREFIX + "_cell") !== -1),
+  "model rows must keep the shipped cell class together with dsh-mo-head");
+expect(modelRows.every((row) => row.props.style === undefined), "an enabled model row must not inline a background that would beat the hover rule");
+expect(modelRows.every((row) => typeof row.props.onDragStart === "function" && typeof row.props.onDrop === "function" && typeof row.props.onDragOver === "function"),
+  "each model row must wire drag start/over/drop");
+expect(modelRows.every((row) => Array.isArray(row.props.children) && row.props.children.length === 3),
+  "each model row must be one line: dot, name, chips");
+expect(modelRows.every((row) => collect(row, (node) => node.type === "input").length === 0),
+  "no input may live inside a model row");
+const rowDots = collect(tree, byAttr("page-model-dot"));
+expect(rowDots.length === 2 && rowDots.every((dot) => dot.props["data-mo-on"] === "true"),
+  "each model row needs its enable dot, on by default, got " + JSON.stringify(rowDots.map((dot) => dot.props["data-mo-on"])));
 const baseField = parentOf(tree, byAttr("page-base-url"));
 expect(baseField !== undefined && baseField.props.style.flexDirection === "column", "detail fields must stack label above control");
 const injected = fakeDocument.head.children.map((node) => node.textContent || "").join("\n");
 expect(injected.indexOf(".dsh-mo-pagerow{display:flex;flex-direction:column;") !== -1, "the page-row class must carry the row layout");
-for (const rule of [".dsh-mo-list .dsh-mo-head{cursor:grab;}", ".dsh-mo-pagerow:hover{", ".dsh-mo-grip{cursor:grab;}", ".dsh-mo-head:hover{"]) {
+for (const rule of [".dsh-mo-list .dsh-mo-head{cursor:grab;}", ".dsh-mo-pagerow:hover{", ".dsh-mo-head:hover{"]) {
   expect(injected.indexOf(rule) !== -1, "the injected sheet must keep " + rule);
 }
 
 /* the switches: plugin-only visibility, stored next to the provider order */
+const editableRailRows = () => collect(tree, byAttr("page-provider")).filter((row) => row.props["data-mo-official"] !== "true");
 let providerSwitch = collect(tree, byAttr("page-provider-switch"))[0];
 expect(providerSwitch !== undefined && providerSwitch.props.role === "switch", "the route header needs a switch");
 expect(providerSwitch.props["aria-checked"] === "true", "a route starts enabled");
 expect(String(providerSwitch.props.title).indexOf("DSH 配置原样保留") !== -1, "the switch must state that the config is untouched: " + String(providerSwitch.props.title));
+/* The editable row's dot IS the plugin's enable state now (it used to mean "configured"). */
+expect(editableRailRows().every((row) => {
+  const dot = collect(row, byAttr("page-provider-dot"))[0];
+  return dot !== undefined && dot.props["data-mo-on"] === "true";
+}), "an enabled route's dot must carry data-mo-on=true");
 providerSwitch.props.onClick({ stopPropagation: function () {} });
 tree = render();
 providerSwitch = collect(tree, byAttr("page-provider-switch"))[0];
 expect(providerSwitch.props["aria-checked"] === "false", "clicking must turn the route off");
 expect(JSON.parse(store.get("dsh-model-organizer.hiddenProviders") || "{}").hcnsec === true, "the off route must persist in the plugin's own store");
-expect(collect(tree, byAttr("page-provider")).some((row) => row.props.style && row.props.style.opacity === 0.5), "a disabled route must be dimmed in the rail");
+expect(editableRailRows().some((row) => row.props.style && row.props.style.opacity === 0.5), "a disabled route must be dimmed in the rail");
+expect(editableRailRows().some((row) => {
+  const dot = collect(row, byAttr("page-provider-dot"))[0];
+  return dot !== undefined && dot.props["data-mo-on"] === "false";
+}), "the disabled route's dot must flip to data-mo-on=false");
 providerSwitch.props.onClick({ stopPropagation: function () {} });
 tree = render();
 expect(JSON.parse(store.get("dsh-model-organizer.hiddenProviders") || "{}").hcnsec === undefined, "clicking again must clear the route flag");
-expect(collect(tree, byAttr("page-provider")).every((row) => row.props.style === undefined || row.props.style.opacity === undefined), "the rail must undim");
+expect(editableRailRows().every((row) => row.props.style === undefined || row.props.style.opacity === undefined), "the rail must undim");
 
-const modelSwitch = collect(tree, byAttr("page-model-switch"))[0];
-expect(modelSwitch !== undefined && modelSwitch.props["aria-checked"] === "true", "every model row needs a switch");
-expect(modelSwitch.props["data-mo-id"] === "DeepSeek-V4-Flash", "the switch belongs to its row, got " + String(modelSwitch.props["data-mo-id"]));
-modelSwitch.props.onClick({ stopPropagation: function () {} });
+/* A click on a model row opens the details dialog (portaled to body, so it rides the
+   same resolved tree the harness walks). Every field lives there now. */
+const modelRow = collect(tree, byAttr("page-model")).filter((row) => row.props["data-mo-id"] === "DeepSeek-V4-Flash")[0];
+expect(modelRow !== undefined, "the model row must be clickable");
+modelRow.props.onClick();
+tree = render();
+const dialogNodes = [];
+collect(tree, (node) => node.props && typeof node.props["data-mo"] === "string" && node.props["data-mo"].indexOf("model-dialog") === 0, dialogNodes);
+const dialogMarkers = dialogNodes.map((node) => node.props["data-mo"]);
+expect(dialogMarkers[0] === "model-dialog" && dialogMarkers[1] === "model-dialog-card",
+  "the dialog container must wrap its card, got " + dialogMarkers.slice(0, 3).join(","));
+for (const marker of ["model-dialog", "model-dialog-card", "model-dialog-close", "model-dialog-id", "model-dialog-name",
+  "model-dialog-context", "model-dialog-max", "model-dialog-text", "model-dialog-image", "model-dialog-reasoning-option",
+  "model-dialog-level", "model-dialog-level-value", "model-dialog-level-add", "model-dialog-level-remove",
+  "model-dialog-switch", "model-dialog-delete", "model-dialog-cancel", "model-dialog-save"]) {
+  expect(dialogMarkers.indexOf(marker) !== -1, "the details dialog must render " + marker);
+}
+expect(dialogMarkers.filter((marker) => marker === "model-dialog-reasoning-option").length === 3,
+  "the reasoning control must offer exactly three modes");
+expect(collect(tree, byAttr("model-dialog-reasoning-option")).map((node) => node.props["data-mo-id"]).join(",") === "inherit,none,custom",
+  "the reasoning options must be inherit, none, custom");
+expect(collect(tree, byAttr("model-dialog-id"))[0].props.value === "DeepSeek-V4-Flash", "the dialog must load the row's id");
+expect(collect(tree, byAttr("model-dialog-name"))[0].props.value === "", "an unnamed model must open with an empty display name");
+expect(collect(tree, byAttr("model-dialog-context"))[0].props.value === "1M", "the dialog must spell the context window");
+expect(collect(tree, byAttr("model-dialog-max"))[0].props.value === "384K", "the dialog must spell the max tokens");
+expect(collect(tree, byAttr("model-dialog-id"))[0].props.style.boxSizing === "border-box", "the dialog's controls must use border-box");
+const textBox = collect(tree, byAttr("model-dialog-text"))[0];
+expect(textBox.props.type === "checkbox" && textBox.props.checked === true && textBox.props.disabled === true,
+  "text input is always on and read-only in the dialog");
+expect(collect(tree, byAttr("model-dialog-image"))[0].props.checked === true, "the vision checkbox must reflect the stored capabilities");
+expect(collect(tree, byAttr("model-dialog-switch"))[0].props["data-mo-id"] === "DeepSeek-V4-Flash", "the dialog's enable switch belongs to its row");
+expect(collect(tree, byAttr("model-dialog-delete")).length === 1, "editing an existing model offers delete");
+
+/* The dialog's own enable switch rides the plugin's hidden list; the row dot follows. */
+collect(tree, byAttr("model-dialog-switch"))[0].props.onClick({ stopPropagation: function () {} });
 tree = render();
 expect(JSON.parse(store.get("dsh-model-organizer.hiddenModels") || "{}")["hcnsec/DeepSeek-V4-Flash"] === true, "the off model must persist under provider/id");
-expect(collect(tree, byAttr("page-model")).some((row) => row.props.style && row.props.style.opacity === 0.5), "a disabled model must be dimmed");
-collect(tree, byAttr("page-model-switch"))[0].props.onClick({ stopPropagation: function () {} });
+expect(collect(tree, byAttr("page-model")).filter((row) => row.props["data-mo-id"] === "DeepSeek-V4-Flash").every((row) => row.props.style && row.props.style.opacity === 0.5),
+  "a disabled model must be dimmed");
+expect(collect(tree, byAttr("page-model-dot")).filter((dot) => dot.props["data-mo-on"] === "false").length === 1,
+  "the disabled model's dot must flip to data-mo-on=false");
+collect(tree, byAttr("model-dialog-switch"))[0].props.onClick({ stopPropagation: function () {} });
 tree = render();
+expect(JSON.parse(store.get("dsh-model-organizer.hiddenModels") || "{}")["hcnsec/DeepSeek-V4-Flash"] === undefined, "clicking again must clear the model flag");
 expect(collect(tree, byAttr("page-model")).every((row) => row.props.style === undefined), "clicking again must undim the row");
+expect(collect(tree, byAttr("model-dialog")).length === 1, "the dialog stays open while its switch is toggled");
 
-/* Add model + type + save writes models[] through the settings mutation */
+/* 取消 changes nothing */
+const beforeCancel = mutations.length;
+collect(tree, byAttr("model-dialog-cancel"))[0].props.onClick();
+tree = render();
+expect(collect(tree, byAttr("model-dialog")).length === 0, "取消 must close the details dialog");
+expect(mutations.length === beforeCancel, "取消 must not write");
+
+/* Add model opens the (empty) details dialog in its new-model mode; Save is ONE mutate
+   straight to the store — there is no page-level draft and no footer Save any more. */
 await tick();
 let addButton = collect(tree, byAttr("page-model-add"))[0];
 expect(addButton !== undefined, "Add model button must exist");
 addButton.props.onClick();
 tree = render();
-let idInputs = collect(tree, byAttr("page-model-id"));
-expect(idInputs.length === 3, "Add model must append one draft row, got " + idInputs.length);
-idInputs[2].props.onChange({ target: { value: "brand-new" } });
-tree = render();
-idInputs = collect(tree, byAttr("page-model-id"));
-expect(idInputs[2].props.value === "brand-new", "typing must reach the draft row");
-collect(tree, byAttr("page-models-save"))[0].props.onClick();
-await tick();
-const modelWrite = mutations.filter((row) => row.ops.some((op) => op.path.join("/") === "providers/hcnsec/models")).pop();
-expect(modelWrite !== undefined, "Save model must write providers.<route>.models");
-if (modelWrite) expect(modelWrite.ns === "llm-pi-ai", "writes must target the llm-pi-ai namespace, got " + modelWrite.ns);
-expect(modelWrite.ops[0].value.length === 3 && modelWrite.ops[0].value[2].id === "brand-new", "the written array must carry the new model");
-expect(modelWrite.ops[0].value[2].input.join(",") === "text", "a row without vision must write text-only input");
-expect(modelWrite.ops[0].value[2].name === undefined, "the id doubles as the display name — nothing may write a separate name");
+expect(collect(tree, byAttr("model-dialog")).length === 1, "Add model must open the details dialog");
+expect(flattenText(collect(tree, byAttr("model-dialog-card"))[0]).join(" ").indexOf("添加模型") !== -1,
+  "the new-model dialog must carry its own title");
+expect(collect(tree, byAttr("model-dialog-id"))[0].props.value === "", "the new-model dialog must start empty");
+expect(collect(tree, byAttr("model-dialog-delete")).length === 0, "a model that does not exist yet must not offer delete");
 
-/* "Fetch models" opens the picker the way the shipped page does: the draft stays
-   untouched until 「添加所选」, so a wide listing never becomes a cleanup chore. */
+/* an empty id is refused on the dialog before any write */
+const beforeEmpty = mutations.length;
+collect(tree, byAttr("model-dialog-save"))[0].props.onClick();
+await tick();
+tree = render();
+expect(mutations.length === beforeEmpty, "an empty model id must not reach the host");
+expect(collect(tree, byAttr("model-dialog")).length === 1, "the refusal must keep the dialog open");
+expect(flattenText(collect(tree, byAttr("model-dialog-error"))[0]).join(" ").indexOf("模型 ID 不能为空") !== -1,
+  "the refusal must be explained on the dialog");
+
+/* fill it in: id, display name, capacities, vision, and a custom reasoning level list */
+collect(tree, byAttr("model-dialog-id"))[0].props.onChange({ target: { value: "brand-new" } });
+tree = render();
+collect(tree, byAttr("model-dialog-name"))[0].props.onChange({ target: { value: "全新模型" } });
+tree = render();
+collect(tree, byAttr("model-dialog-context"))[0].props.onChange({ target: { value: "64K" } });
+tree = render();
+collect(tree, byAttr("model-dialog-max"))[0].props.onChange({ target: { value: "8K" } });
+tree = render();
+collect(tree, byAttr("model-dialog-image"))[0].props.onChange({ target: { checked: true } });
+tree = render();
+expect(collect(tree, byAttr("model-dialog-name"))[0].props.value === "全新模型", "typing must reach the dialog row");
+collect(tree, byAttr("model-dialog-reasoning-option")).filter((node) => node.props["data-mo-id"] === "custom")[0].props.onClick();
+tree = render();
+expect(collect(tree, byAttr("model-dialog-level")).length === 0, "a fresh custom mode starts with no level");
+collect(tree, byAttr("model-dialog-level-add"))[0].props.onClick();
+tree = render();
+collect(tree, byAttr("model-dialog-level"))[0].props.onChange({ target: { value: "high" } });
+tree = render();
+collect(tree, byAttr("model-dialog-level-value"))[0].props.onChange({ target: { value: "high" } });
+tree = render();
+
+const beforeSave = mutations.length;
+collect(tree, byAttr("model-dialog-save"))[0].props.onClick();
+await tick();
+tree = render();
+const modelWrites = mutations.slice(beforeSave);
+expect(modelWrites.length === 1, "Save must issue exactly ONE mutate, got " + modelWrites.length);
+const modelWrite = modelWrites[0];
+expect(modelWrite !== undefined, "Save model must write providers.<route>.models");
+if (modelWrite) {
+  expect(modelWrite.ns === "llm-pi-ai", "writes must target the llm-pi-ai namespace, got " + modelWrite.ns);
+  expect(modelWrite.ops.length === 1 && modelWrite.ops[0].op === "set" && modelWrite.ops[0].path.join("/") === "providers/hcnsec/models",
+    "the single op must set providers.<route>.models, got " + JSON.stringify(modelWrite.ops));
+  const written = modelWrite.ops[0].value;
+  expect(written.length === 3 && written[2].id === "brand-new", "the written array must carry the new model");
+  expect(written[2].name === "全新模型", "the dialog's display name must be written, got " + JSON.stringify(written[2]));
+  expect(written[2].input.join(",") === "text,image", "the vision checkbox must write image input");
+  expect(written[2].contextWindow === 64000 && written[2].maxTokens === 8000, "the capacities must be parsed: " + JSON.stringify(written[2]));
+  expect(JSON.stringify(written[2].reasoningEfforts) === JSON.stringify({ high: "high" }),
+    "the custom level must be written: " + JSON.stringify(written[2].reasoningEfforts));
+}
+expect(collect(tree, byAttr("model-dialog")).length === 0, "a successful save must close the dialog");
+
+/* "Fetch models" opens the picker; adopting is a WRITE, not a draft — the picked rows
+   join the config immediately through the same single mutate. */
 tree = render();
 expect(collect(tree, byAttr("page-model-name")).length === 0, "the model row must not keep a separate name input");
 const fetchButton = collect(tree, byAttr("page-models-fetch"))[0];
 expect(fetchButton !== undefined, "the model list header needs a fetch action");
-const draftBefore = collect(tree, byAttr("page-model-id")).map((node) => node.props.value).join("|");
+const modelIds = () => collect(tree, byAttr("page-model")).map((row) => row.props["data-mo-id"]);
+const idsBeforeFetch = modelIds().join("|");
+const writesBeforeFetch = mutations.length;
 fetchButton.props.onClick();
 await tick();
 tree = render();
@@ -444,10 +591,10 @@ expect(String(dialogCard.props.style.background).indexOf("color-mix") !== -1,
   "the dialog background must be mixed toward transparent, otherwise the token alone reads see-through");
 let items = collect(tree, byAttr("fetch-item"));
 expect(items.length === 1 && items[0].props["data-mo-id"] === "brand-new-from-host",
-  "only models the draft lacks are offered, got [" + items.map((item) => item.props["data-mo-id"]).join(",") + "]");
+  "only models the list lacks are offered, got [" + items.map((item) => item.props["data-mo-id"]).join(",") + "]");
 const boxOf = (item) => (Array.isArray(item.props.children) ? item.props.children[0] : item.props.children);
 expect(boxOf(items[0]).props.checked === true, "candidates start checked");
-expect(collect(tree, byAttr("page-model-id")).map((node) => node.props.value).join("|") === draftBefore, "opening the picker must not touch the draft");
+expect(modelIds().join("|") === idsBeforeFetch && mutations.length === writesBeforeFetch, "opening the picker must not touch the list");
 expect(flattenText(tree).join(" ").indexOf("选择要添加的模型") !== -1, "the dialog keeps the shipped wording");
 expect(discovered.length === 1 && discovered[0].ns === "llm-pi-ai" && discovered[0].request.provider === "hcnsec"
   && discovered[0].request.baseURL === "https://api.hcnsec.cn/v1",
@@ -469,7 +616,7 @@ expect(boxOf(collect(tree, byAttr("fetch-item"))[0]).props.checked === false, "u
 collect(tree, byAttr("fetch-cancel"))[0].props.onClick();
 tree = render();
 expect(collect(tree, byAttr("fetch-dialog")).length === 0, "取消 must close the picker");
-expect(collect(tree, byAttr("page-model-id")).map((node) => node.props.value).join("|") === draftBefore, "取消 must not touch the draft");
+expect(modelIds().join("|") === idsBeforeFetch && mutations.length === writesBeforeFetch, "取消 must not write");
 
 /* an unchecked candidate is never adopted */
 collect(tree, byAttr("page-models-fetch"))[0].props.onClick();
@@ -477,32 +624,51 @@ await tick();
 tree = render();
 boxOf(collect(tree, byAttr("fetch-item"))[0]).props.onChange({ target: { checked: false } });
 tree = render();
+const writesBeforeAdopt = mutations.length;
 collect(tree, byAttr("fetch-adopt"))[0].props.onClick();
+await tick();
 tree = render();
-expect(collect(tree, byAttr("page-model-id")).map((node) => node.props.value).join("|") === draftBefore, "an unchecked candidate must not be adopted");
+expect(mutations.length === writesBeforeAdopt, "an unchecked candidate must not be adopted");
+expect(collect(tree, byAttr("fetch-dialog")).length === 0, "添加所选 must close the picker even when nothing is picked");
 
-/* 添加所选 appends exactly the checked rows and closes */
+/* 添加所选 writes exactly the checked rows through ONE mutate */
 collect(tree, byAttr("page-models-fetch"))[0].props.onClick();
 await tick();
 tree = render();
+const writesBeforeAdopt2 = mutations.length;
 collect(tree, byAttr("fetch-adopt"))[0].props.onClick();
+await tick();
 tree = render();
-const idsAfterFetch = collect(tree, byAttr("page-model-id")).map((node) => node.props.value);
-expect(idsAfterFetch.indexOf("brand-new-from-host") !== -1, "添加所选 must append the checked model, got [" + idsAfterFetch.join(",") + "]");
-expect(idsAfterFetch.filter((id) => id === "DeepSeek-V4-Flash").length === 1, "an already-listed model must not be duplicated");
-expect(collect(tree, byAttr("page-model-vision")).some((node) => node.props.checked === true), "the adopted row must carry the discovered vision capability");
+const adoptWrites = mutations.slice(writesBeforeAdopt2);
+expect(adoptWrites.length === 1, "adopting must issue exactly ONE mutate, got " + adoptWrites.length);
+if (adoptWrites.length === 1) {
+  const adoptedOp = adoptWrites[0].ops[0];
+  expect(adoptedOp.op === "set" && adoptedOp.path.join("/") === "providers/hcnsec/models",
+    "the adopt write must set providers/<route>/models, got " + JSON.stringify(adoptWrites[0].ops));
+  const adopted = adoptedOp.value;
+  expect(adopted.some((model) => model.id === "brand-new-from-host"), "添加所选 must append the checked model");
+  expect(adopted.filter((model) => model.id === "DeepSeek-V4-Flash").length === 1, "an already-listed model must not be duplicated");
+  const incoming = adopted.filter((model) => model.id === "brand-new-from-host")[0];
+  expect(incoming.contextWindow === 128000, "the discovered context window must be written: " + JSON.stringify(incoming));
+  expect(Array.isArray(incoming.input) && incoming.input.indexOf("image") !== -1, "the discovered vision capability must be written");
+}
 expect(collect(tree, byAttr("fetch-dialog")).length === 0, "添加所选 must close the picker");
 
-/* an empty id is refused before any write */
+/* an empty id is still refused before any write — now on the dialog, and 取消 leaves the
+   list exactly as it was. */
 tree = render();
 collect(tree, byAttr("page-model-add"))[0].props.onClick();
 tree = render();
 const before = mutations.length;
-collect(tree, byAttr("page-models-save"))[0].props.onClick();
+collect(tree, byAttr("model-dialog-save"))[0].props.onClick();
 await tick();
-expect(mutations.length === before, "an empty model id must not reach the host");
 tree = render();
-expect(flattenText(tree).join(" ").indexOf("模型 ID 不能为空") !== -1, "the refusal must be explained on the page");
+expect(mutations.length === before, "an empty model id must not reach the host");
+expect(flattenText(tree).join(" ").indexOf("模型 ID 不能为空") !== -1, "the refusal must be explained on the dialog");
+expect(collect(tree, byAttr("model-dialog-error")).length === 1, "the dialog must show the error slot");
+collect(tree, byAttr("model-dialog-cancel"))[0].props.onClick();
+tree = render();
+expect(collect(tree, byAttr("model-dialog")).length === 0 && mutations.length === before, "取消 must close the refused dialog without a write");
 
 /* provider fields write their own paths */
 tree = render();
@@ -526,7 +692,7 @@ expect(mutations.some((row) => row.ops[0].path.join("/") === "providers/hcnsec/a
   "protocol must write providers.<route>.api");
 /* width:100% plus padding and border overflowed the settings column (the screenshot's
    first red box) — every sized control must opt into border-box. */
-const sizedControls = ["page-base-url", "page-api-key", "page-model-id"].map((marker) => collect(tree, byAttr(marker))[0]).concat(apiOptions);
+const sizedControls = ["page-base-url", "page-api-key"].map((marker) => collect(tree, byAttr(marker))[0]).concat(apiOptions);
 expect(sizedControls.every((node) => node !== undefined && node.props.style.boxSizing === "border-box"),
   "every sized control must use border-box, otherwise padding pushes it past its column");
 
@@ -707,6 +873,22 @@ expect(registrations.filter((entry) => entry.opts.name === "settings.section").l
   "a second pass while still closed must not register again");
 fakeDocument.querySelectorAll = (selector) => (selector === "button" ? navCells.concat(decoyCells) : []);
 
+/* The footer panel keeps its HEAD even when there is nothing to sort: returning null for
+   0–1 providers used to take the only way back to this page with it. */
+snapshot = { view: { writable: true, revision: 9, namespaces: [{ ns: "llm-pi-ai", revision: 9, value: { providers: { solo: { displayName: "独苗网关", models: [] } } } }] } };
+const lonelyPanel = resolve(panelSeat.comp(Object.assign({}, panelSeat.opts.inject())), "panel");
+expect(collect(lonelyPanel, byAttr("panel")).length === 1, "the footer panel must render even with fewer than 2 providers");
+expect(collect(lonelyPanel, byAttr("provider-row")).length === 0, "with nothing to sort the panel must not render a list");
+const lonelyHead = collect(lonelyPanel, (node) => typeof node.props.className === "string" && node.props.className.indexOf("dsh-mo-panelhead") !== -1)[0];
+expect(lonelyHead !== undefined, "the < 2 providers panel must keep its head row");
+expect(lonelyHead !== undefined && collect(lonelyHead, byAttr("panel-open-organizer")).length === 1,
+  "the head must keep the way back to the organizer page");
+expect(flattenText(lonelyPanel).join(" ").indexOf("没有顺序需要调整") !== -1,
+  "the empty panel must explain why there is no list, got " + flattenText(lonelyPanel).join(" "));
+const lonelyLink = collect(lonelyPanel, byAttr("panel-open-organizer"))[0];
+expect(lonelyLink !== undefined && typeof lonelyLink.props.onClick === "function", "the lonely panel's link must stay wired");
+snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai", revision: 4, user: null, value: { providers: { hcnsec: providerA, jiyuan: providerB, zhipu: providerC } } }] } };
+
 officialPriority = -5;   /* the shipped entry may sit anywhere; ours must be relative */
 const restarts = [];
 const restartScope = Object.assign({}, scope, {
@@ -729,5 +911,5 @@ if (failures.length > 0) {
   console.error("FAIL\n - " + failures.join("\n - "));
   process.exitCode = 1;
 } else {
-  console.log("smoke: 3 seats, editable page, drag wiring, switches, picker, add-provider, priority handover, settings/credential writes verified");
+  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified");
 }

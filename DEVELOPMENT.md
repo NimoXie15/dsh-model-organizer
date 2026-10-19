@@ -40,7 +40,7 @@ ctx.inject(["slots", "settingsScope", "remote", "remote.settings"], (s) => mount
 - **官方 `providers` 顺序仍是固定排序**：0.2.1-rc.2 新增 `provider-order.js`（account → official → 其余，`toSorted`），不是用户可配 —— 本插件的拖拽排序因此仍有价值。
 - **浮层必须 `ReactDOM.createPortal` 到 `document.body`**：座位在设置页很深的子树里，`position: fixed` 会被困在那个子树的堆叠上下文，被别的插件的悬浮组件盖住 —— 提高 z-index 也没用。
 - **不要占用 `settings.models.provider-card`**：它是 keyed 座位，key 是供应商的 settings namespace，已被 `@linxin666/dsh-client-ui-model-capabilities` 占用；keyed 座位一个 key 只留一个占用者，同 key 同优先级注册会抛错（而且对方用 try/catch 吞掉，等于静默压制它）。本插件只用自己的 `settings.models.footer`（list 座位，按 id 去重）。
-- **行不要内联 `cursor` / `background`**：浮窗的"抓握光标 + 悬停高亮"全部来自官方 sheet（`.dsh-mo-list .dsh-mo-head{cursor:grab}`、`.dsh-mo-head:hover{...}`），而**内联样式优先级高于样式表**。设置页第一版给供应商行内联了 `cursor:pointer` + `background:transparent`，于是两个效果同时消失。规则：官方类名解析成功时行**不内联** background/cursor，状态标记只用不冲突的属性（当前行用 `box-shadow` 画左侧强调条）；官方没有对应类名的行（可编辑的模型行）才用插件自己的 `.dsh-mo-pagerow`（`:hover` 由规则给）加 `.dsh-mo-grip`（光标给把手）。**把行从 inline style 改成 class 时，布局必须一起搬进那条规则**：第一版只把背景搬了过去，行就退化成 block，一行输入框全部竖着堆（实机截图即此）；模型行因此改成「id 行 + 字段行」两行结构，字段行用 grid 固定 `minmax(0,1fr) 68px 68px auto`。
+- **行不要内联 `cursor` / `background`**：浮窗的"抓握光标 + 悬停高亮"全部来自官方 sheet（`.dsh-mo-list .dsh-mo-head{cursor:grab}`、`.dsh-mo-head:hover{...}`），而**内联样式优先级高于样式表**。设置页第一版给供应商行内联了 `cursor:pointer` + `background:transparent`，于是两个效果同时消失。规则：官方类名解析成功时行**不内联** background/cursor，状态标记只用不冲突的属性（当前行用 `box-shadow` 画左侧强调条）；官方没有对应类名的行（可编辑的模型行）才用插件自己的 `.dsh-mo-pagerow`（`:hover` 由规则给）加 `.dsh-mo-grip`（光标给把手）。**把行从 inline style 改成 class 时，布局必须一起搬进那条规则**：第一版只把背景搬了过去，行就退化成 block，一行输入框全部竖着堆（实机截图即此）；模型行因此改成「id 行 + 字段行」两行结构，字段行用 grid 固定 `minmax(0,1fr) 68px 68px auto`（0.5.0 起字段行随行内编辑一起撤掉：模型行只剩绿点 + 名称 + 参数摘要，编辑移进「模型详情」弹窗）。
 - **0.2.1-rc.2 起本插件多了一个真正的设置页**：注册在 `settings.section`（list 座位，平台标注 replaceRisk none），`id: "model-organizer"`、`order: 11`，紧跟在官方「模型」(order 10) 之后。**id 必须自成一格，绝不能写 `models`**：list 座位的导航栏读的是原始 `entries()`（不去重），同 id 会多出一行；而内容渲染走 `entriesOfSlot()`（每格优先级最低的活条目），插件注册又会被运行时强制改写成更低优先级 —— 写 `models` 会直接把官方页遮掉，那是 B 方案（见下），不是本步。页面数据来自与浮窗**同一个** settings mirror（`configForms`/`settingsScope` 的 `describe()`），写入走 `remote.settings.mutate`（`set`/`unset` 两种 op，path 打在 `providers.<路由>.<字段>`），密钥走 `remote.credentials.set/unset`（引用名与官方同一条 `deriveKeyRef` 规则）。`remote.credentials` 与 `remote.llm` 用**独立的 `ctx.inject` 单独申请**并写进 `bridge`：缺任一服务时页面照常挂载，只是密钥区显示"不可用"，不会因为少一个服务就丢掉整个座位。DOM 标记 `[data-mo="page-mounted"]` 表示该座位已挂载。
 
 ## 开发环境
@@ -109,7 +109,29 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 2. **绝不隐藏当前正在使用的那一项** —— 否则选中的模型会在脚底下消失；
 3. 过滤后若为空，回退到完整列表（空菜单比不过滤更糟）。
 
-页面上的表现：关掉的供应商行/模型行变淡（`opacity .5`），开关带 tooltip 说明「只影响本插件、DSH 配置原样保留」。冒烟测试覆盖开关持久化、变淡、以及上述三条语义，并有对照证明改坏即失败。
+页面上的表现：每行左侧一颗绿点，启用＝亮、停用＝暗（行本身也变淡），tooltip 说明「只影响本插件、DSH 配置原样保留」。0.5.0 起模型行与供应商行共用这一个语义——此前供应商行的绿点是**读取现状**（配置过 baseURL / 密钥），不是开关。冒烟测试覆盖开关持久化、变淡、以及上述三条语义，并有对照证明改坏即失败。
+
+### 0.5.0：左栏取数、模型详情弹窗与浮窗头部
+
+**只读一个 settings 命名空间会漏掉别的适配器注册的路由。** 0.4.0 的左栏数据源是 `llm-pi-ai` 那一个命名空间的设置文档，于是 DeepSeek 官方那两条路由根本不出现——它们的设置在**自己的**命名空间里。教训：一个 provider 的配置归属由适配器决定，插件不能假定「我认识的那个 namespace 里没写，就等于这个 provider 不存在」。
+
+**官方模型页自己的口径是 join，本插件没照抄**：官方页用 `remote.llm.listProviders()`（宿主已知的全部路由）∪ `remote.llm.listConfigurableProviders()`（可在设置页编辑的目录）——对 `deepseek-account` / `deepseek-official` 这两条来说两个来源结果相同。本插件只调 `listConfigurableProviders()`，再与 `llm-pi-ai` 设置文档求并：目录里 `settingsPath` 为空的条目（官方 / 内置）渲染成只读行置顶；`settingsPath` 非空、且**已经写进设置文档**的才进拖拽列表，再按 `entry.declared` 分成「官方目录 / 自定义供应商」。教训：只从一个来源取数就会漏（0.4.0 只读设置文档，官方路由整批消失），但也别把官方页的 join 说成自己的口径——文档要写实现真正调的那个 API。
+
+**`settingsPath` 为空 = 命名空间级（官方 / 内置）路由。** 这类路由没有 `providers.<id>` 这一层，编辑要打在它自己命名空间的根上；本插件因此把它们渲染成**只读行**（顶部分组「官方（内置）」，悬停提示「官方路由 · 请到官方模型页编辑（点击前往）」），点击 = `setTakeover(false)`（把「模型」这一行交还官方页，与本页头部「官方模型页」按钮同一个动作）。插件不替它们写配置，只负责把它们列出来并给出出口。
+
+**模型行是即时写盘，没有草稿状态。** 0.5.0 把模型区的行内输入框和页面底部的「保存模型」一起删掉，编辑全部收进「模型详情」弹窗，点保存立刻 `mutate` 一条 op 写回该路由的 `models[]`。原因：模型拖拽排序本来就是把 `models[]` 整体 `set`（必须即时提交），留着草稿行会在拖完之后与配置对不上——既然有一个动作必须即时，索性全部即时，页面状态就只剩「配置的镜像 + 本机 localStorage 里的顺序 / 可见性」。弹窗里能改的字段就是会写进配置的那些：`id`、显示名（`name`，留空则删掉该字段）、`contextWindow`、`maxTokens`、输入模态（文本 / 图片，至少留一个）、`reasoningEfforts`（继承 = 不写、不支持 = `false`、自定义 = 等级字典）；改模型 ID 会把本机的「隐藏」键一起迁移。推理等级的 YAML 声明不再是唯一途径，但仍可继续使用。
+
+**0.5.0 的 DOM 契约**（冒烟测试与手工核对都用；已按 `lib/client.js` 逐项核对）：
+
+- 官方只读行：`[data-mo="page-provider"][data-mo-official="true"]`，`data-mo-id=<路由>`，`role="button"`，`title` =「官方路由 · 请到官方模型页编辑（点击前往）」，点击 / Enter = `setTakeover(false)`；它们不进拖拽列表（拖了也无法生效）；
+- 可编辑供应商行：`[data-mo="page-provider"]`（不带 `data-mo-official`）+ `data-mo-id`；启用点 `[data-mo="page-provider-dot"]` 带 `data-mo-on="true|false"`；
+- 模型行（单行元素）：`[data-mo="page-model"]` + `data-mo-id` + `role="button"` + `draggable`，内含 `[data-mo="page-model-dot"]`（带 `data-mo-on`），行内只剩「名称 + 摘要」两段文本；旧的 `page-model-id` / `-context` / `-max` / `-vision` / `-handle` 与底部的 `page-models-save` 已全部删除；
+- 模型详情弹窗（`ReactDOM.createPortal` 到 `document.body`）：`model-dialog`（背板）/ `-card` / `-close` / `-id` / `-name` / `-context` / `-max` / `-text`（disabled、恒勾选）/ `-image` / `-reasoning-option`（三个，`data-mo-id` = `inherit` / `none` / `custom`）/ `-level` / `-level-value` / `-level-add` / `-level-remove` / `-switch` / `-error` / `-delete`（仅编辑态）/ `-cancel` / `-save`；`page-model-add` 打开它的新建态；
+- 浮窗：可排序供应商 < 2 时 `[data-mo="panel"]` 仍然渲染（头部含 `panel-open-organizer` 与 `providers.onlyOne` 文案），只是不渲染列表。
+
+**浮窗头部在「可排序供应商 < 2」时仍然渲染。** 0.5.0 之前浮窗的挂载条件里带着「可排序供应商 ≥ 2」，于是只挂了官方路由（或只有一个自定义供应商）的用户**连那颗「模型管理页」按钮都看不到**——而它是回到本插件页的唯一入口，等于整页失联。修法是把「头部」与「列表」的渲染条件拆开：头部无条件挂载，列表在无可排序项时收起（折叠状态仍由 `panelOpen` 控制）。不变量：**入口的可见性不能依赖它要排序的内容是否存在**。
+
+---
 
 ## 设置页的两个 UI 陷阱（都是实机截图打回来的）
 
@@ -129,7 +151,7 @@ Error: permission: cannot restore preset "auto" without its active integration
 
 ## 测试
 
-`test/smoke.mjs` 是零依赖的无头冒烟测试：桩 React（带真正的 hook 槽位和一层子组件解析，所以 DragList 的行也在树里）、桩 DOM、假宿主。它检查——三个座位仍然注册；设置页在「有数据 / 空 / 加载中」三态可渲染；**拖拽与编辑真的会写**：供应商行与模型行都带 HTML5 拖拽处理器且保留 `dsh-mo-list`（grab 光标）类；「添加模型」→ 输入 → 「保存」把 `models[]` 写进 `llm-pi-ai`；空 ID 在**写之前**被拒并给出文案；API 地址与协议各写自己的字段；密钥只走 `credentials.set`（引用名由路由派生）。
+`test/smoke.mjs` 是零依赖的无头冒烟测试：桩 React（带真正的 hook 槽位和一层子组件解析，所以 DragList 的行也在树里）、桩 DOM、假宿主。它检查——三个座位仍然注册；设置页在「有数据 / 空 / 加载中」三态可渲染；**拖拽与编辑真的会写**：供应商行与模型行都带 HTML5 拖拽处理器且保留 `dsh-mo-list`（grab 光标）类；模型的增删改都会把 `models[]` 写进 `llm-pi-ai`（0.5.0 起走「模型详情」弹窗、即时写盘）；空 ID 在**写之前**被拒并给出文案；API 地址与协议各写自己的字段；密钥只走 `credentials.set`（引用名由路由派生）。
 
 ```sh
 node test/smoke.mjs        # 或 npm test
@@ -144,25 +166,35 @@ node test/smoke.mjs        # 或 npm test
 - 接管：默认赢下 `models` 这一格、`priority` 相对官方计算、交还只对一次打开有效（关闭设置即收回）、节点被 React 复用时双向自愈；
 - 以上全部由 `node test/smoke.mjs` 覆盖（零依赖，桩 React + 桩 DOM + 假宿主），并逐条做过"故意改坏 → 必须失败"的反向对照。
 
-## 待办：B 方案 —— 用自己的页替换官方「模型」页（含开关）
+### 0.5.0 变更与验证范围
 
-已调研、未实施。三条硬事实决定做法：
+- 左栏取数 = `listConfigurableProviders()` 目录 ∪ `llm-pi-ai` 设置文档：官方路由（`settingsPath` 为空）以只读行进入顶部分组「官方（内置）」，点击走 `setTakeover(false)` 回官方模型页；其余按 `entry.declared` 分「官方目录 / 自定义供应商」；
+- 模型行改成一整行（绿点 + 名称 + 参数摘要）：整行可拖动排序、单击打开「模型详情」弹窗，弹窗内改全部字段并即时写盘，模型区不再有行内输入框与「保存模型」；
+- 每行绿点统一为「启用」（插件侧可见性，配置不动）；供应商行不再拿「配置过 baseURL / 密钥」当绿点含义；
+- 官方模型页浮窗的头部在可排序供应商 < 2 时仍渲染，列表可收起。
+
+- 冒烟覆盖（`node test/smoke.mjs` 全绿、退出码 0）：三个座位仍注册；官方只读行与可编辑行分离、只读行点击交还；模型单行（`role=button` + `draggable` + `page-model-dot`）且旧行内标记与底部保存按钮均已消失；详情弹窗全套 `model-dialog*` 标记、推理等级三态、启用开关、取消不写盘、空 ID 保存被拒；保存 = 单次 `mutate` 写 `providers.<route>.models`；获取可用模型弹窗；添加提供商；浮窗 <2 供应商仍渲染头部与 `panel-open-organizer`；优先级交还与设置 / 凭据写入；
+- 逐条做过「故意改坏 → 必须失败」的反向对照。
+
+## B 方案：用自己的页接管官方「模型」这一行（0.4.0 已落地）
+
+**结论先行**：最终落地的做法是「同 id + 相对优先级」——注册一条 `id: "models"` 的 section，`priority = 官方条目优先级 − 1` 时赢下这一格（接管），`+ 1` 时交还（见上文 B2）。下面三条是当初的调研记录，它们仍然解释了这套约束从哪来：
 
 1. **开关没有公开 API**：设置壳的 `openSection(id)` 只存在于 `ui-settings-general` 内部的 `createSettingsShellStore()`，只经 `sidebar.settings` 座位下发；全量扫描客户端 bundle 没有别的调用方，section 的 owner props 也只有 `{ close }`。所以「切回官方页」只能靠撤销遮挡（dispose 自己的注册）或 DOM 点击，不能靠调 API 切页。
 2. **同 id 遮挡可行但有副作用**：SlotCore 对 list 座位只在「同 id **且** 同优先级」时抛错；插件注册会被运行时强制改成更低优先级，所以 `id: "models"` 能压掉官方内容，但导航栏读原始 `entries()` 会多出一行同 id 的「模型」。
 3. **官方页的 footer 座位会失联**：遮挡期间 `settings.models.footer`（本插件浮窗的落点）不再挂载，开关的「回路」要另找地方（本页页头 + 官方页 footer 各放一份是可行解）。
 
-倾向做法（B2）：保留官方导航项作唯一入口，激活时隐藏官方内容列并用 `ReactDOM.createPortal` 把本页挂进同一内容列；开关＝撤掉接管。代价是依赖官方 DOM 结构（本插件已在这页做卡片 `order` 镜像，属于既有实践）。
+调研时倾向的「portal 进官方内容列」**没有被采用**：接管靠优先级换格，因此不依赖官方 DOM 结构，也不用往官方内容列里插节点；代价是本插件自己那一格要常驻隐藏（B2 里的双向自愈）。
 
 ### 设置页还没对齐截图的部分（按实施顺序）
 
 1. **行图标**：供应商行左侧图标。必须先从 primitives 的导出表核对真实名字（`IconXxxOutlineRegular` 形状），猜名会静默返回 null。
-2. **每模型行的操作图标**：现在只有 `✕` 删除；截图里是「链接 / 铅笔 / 垃圾桶」三枚，另外截图那种「单行展示 + 铅笔编辑」的形态与本页现在的行内编辑是两种交互，要选一种。
-3. **每模型 / 每供应商开关**：pi-ai 的 `modelFields` 与 profile 都**没有** enabled/disabled 字段。要么插件侧记录（只管本插件渲染的菜单，宿主其它入口不受影响），要么提交上游加字段。先定语义再画开关。
+2. **每模型行的操作图标**（0.5.0 已定）：模型行改成整行单击开「模型详情」弹窗，行上不再有「链接 / 铅笔 / 垃圾桶」三枚图标，删除收进弹窗。
+3. **每模型 / 每供应商开关**（0.5.0 已定）：pi-ai 的 `modelFields` 与 profile 都**没有** enabled/disabled 字段，所以开关落在插件侧存储（`dsh-model-organizer.hiddenProviders` / `.hiddenModels`），语义只有「从本插件的菜单里移除」；表现统一成每行左侧的绿点。
 4. **顶部「+ 添加供应商」**：新建路由要同时写 profile（baseURL/api）与凭据（`deriveKeyRef`），还要处理路由重名与 `settings/conflict` 重试。
-5. **顶部右侧「切回官方页」开关**：属于 B 方案，见上一节。
+5. ~~**顶部右侧「切回官方页」开关**~~（已做）：本页页头右侧的「官方模型页」按钮就是它，动作是 `setTakeover(false)`（只对这一次打开设置有效）。
 
-已对齐截图的部分：两栏主从布局、供应商分组（官方目录 / 自定义供应商，来自 `remote.llm.listConfigurableProviders`）、API 地址 / API 格式 / API 密钥三行、模型列表的增删改与拖拽、浮窗同款的悬停与抓握光标、模型列表标题右侧的「获取可用模型」（`remote.llm.discoverModels`）—— 交互与官方一致：**弹窗勾选**，只列草稿里还没有的模型、默认全选、可搜索与全选/取消全选，**取消/关闭都不动草稿**，只有「添加所选」才写进草稿，以及**「ID 即显示名」**的取舍（本页不写 `name` 字段，宿主自然回退到 id；代价是保存后该路由不再保留单独的显示名）。
+已对齐截图的部分：两栏主从布局、供应商分组（官方目录 / 自定义供应商，来自 `remote.llm.listConfigurableProviders`）、API 地址 / API 格式 / API 密钥三行、模型列表的增删改与拖拽、浮窗同款的悬停与抓握光标、模型列表标题右侧的「获取可用模型」（`remote.llm.discoverModels`）—— 交互与官方一致：**弹窗勾选**，只列配置里还没有的模型、默认全选、可搜索与全选/取消全选，**取消/关闭都不写配置**，只有「添加所选」才落盘，以及**模型显示名**的处理（0.4.0 不写 `name` 字段、宿主回退到 id；0.5.0 起在「模型详情」弹窗里可以直接填显示名，保存时写进该模型的 `name`）。
 
 ## 发版
 
