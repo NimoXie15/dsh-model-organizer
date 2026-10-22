@@ -1,7 +1,7 @@
 {
   "name": "@nimoxie/dsh-model-organizer",
-  "version": "0.5.11",
-  "description": "DSH 模型整理插件：输入框的模型下拉改为「供应商分组 + 模型二级折叠菜单」（含推理等级），并在模型设置页提供一个可拖拽的「供应商与模型顺序」浮窗。",
+  "version": "0.5.12",
+  "description": "DSH 模型整理插件：输入框模型菜单按供应商分组并可拖拽排序；接管设置里的「模型」页——直接编辑供应商与模型、获取可用模型、添加/删除路由。",
   "type": "module",
   "scripts": {
     "test": "node test/smoke.mjs"

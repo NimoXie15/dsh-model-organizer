@@ -445,6 +445,32 @@ for (const rule of [".dsh-mo-list .dsh-mo-head{cursor:grab;}", ".dsh-mo-pagerow:
   expect(injected.indexOf(rule) !== -1, "the injected sheet must keep " + rule);
 }
 
+/* Hover is a sheet concern here: the resting paint is inline, so these rules are the
+   only place the pointer state can live. Every button surface — the page, each dialog
+   and the footer panel — must be in the scope, and the paint must be allowed to outrank
+   the inline resting style (otherwise the rule silently does nothing). */
+const hoverScope = ':where([data-mo="page"] button,[data-mo="panel"] button,'
+  + '[data-mo="fetch-dialog"] button,[data-mo="add-dialog"] button,'
+  + '[data-mo="model-dialog"] button,[data-mo="provider-delete-dialog"] button)';
+expect(injected.indexOf(hoverScope + ":not([role='switch']):not(:disabled):hover{background:") !== -1,
+  "every button in the page, its dialogs and the panel needs a hover background");
+for (const marker of ["fetch-dialog", "add-dialog", "model-dialog", "provider-delete-dialog"]) {
+  expect(hoverScope.indexOf('[data-mo="' + marker + '"] button') !== -1,
+    "the hover scope must include the " + marker + " buttons");
+}
+expect(injected.indexOf("[data-mo='page-provider-delete']") !== -1
+  && injected.indexOf("[data-mo='page-model-delete']") !== -1,
+  "the two trash buttons need their own hover treatment");
+expect(injected.indexOf(":where([data-mo='page-key-save']") !== -1
+  && injected.indexOf("[data-mo='model-dialog-save']") !== -1,
+  "primary actions must keep their accent fill on hover, not turn grey");
+expect(injected.indexOf(":is([role='switch']):not(:disabled):hover{box-shadow:") !== -1,
+  "a switch must hover with a ring instead of repainting its on/off fill");
+expect(injected.indexOf(":not([role='switch'])") !== -1,
+  "the generic hover rule must exclude switches, or hovering would fake a state change");
+expect(injected.indexOf("!important") !== -1,
+  "the hover paint must be able to outrank the inline resting paint");
+
 /* the switches: plugin-only visibility, stored next to the provider order */
 const editableRailRows = () => collect(tree, byAttr("page-provider")).filter((row) => row.props["data-mo-official"] !== "true");
 let providerSwitch = collect(tree, byAttr("page-provider-switch"))[0];
@@ -1017,8 +1043,23 @@ snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai"
   expect(String(deleteProvider.props.title || "").indexOf("删除") !== -1
     && collect(deleteProvider, (node) => node.props && node.props["data-icon"] === "trash").length === 1,
     "the provider delete button must use the shipped IconTrashOutlineRegular");
-  expect(deleteProvider.props.style.height === 17 && String(deleteProvider.props.className).indexOf("dsh-mo-act-danger") !== -1,
-    "the provider trash must match the switch height and carry the danger colour");
+  /* The provider trash and the model trash are the same control in two hosts: same box,
+     same red frame. A near-match is visible side by side, which is what this pins. */
+  const switchBox = collect(tree, byAttr("page-provider-switch"))[0];
+  expect(deleteProvider.props.style.height === 17 && deleteProvider.props.style.width === 19
+    && String(deleteProvider.props.className).indexOf("dsh-mo-act-danger") !== -1,
+    "the provider trash must be the switch-height icon box and carry the danger colour");
+  expect(switchBox !== undefined && deleteProvider.props.style.height === switchBox.props.style.height,
+    "the trash must be exactly as tall as the enable switch, got " + JSON.stringify([deleteProvider.props.style.height, switchBox && switchBox.props.style.height]));
+  /* Equal heights are not enough in a baseline-aligned head: an icon-only flex box has no
+     text baseline, so both controls must opt into centre alignment or they sit a pixel or
+     two apart (the cropped screenshot that showed them out of line). */
+  expect(String(deleteProvider.props.style.alignSelf) === "center"
+    && switchBox !== undefined && String(switchBox.props.style.alignSelf) === "center",
+    "the trash and the switch must both opt out of the baseline row, got "
+      + JSON.stringify([deleteProvider.props.style.alignSelf, switchBox && switchBox.props.style.alignSelf]));
+  expect(String(deleteProvider.props.style.borderColor).indexOf("state-error") !== -1,
+    "the provider trash must frame itself in the danger colour, got " + String(deleteProvider.props.style.borderColor));
   const head = parentOf(tree, byAttr("page-provider-delete"));
   expect(head !== undefined && collect(head, (node) => node.props && node.props.role === "switch").length === 1,
     "the delete button must live in the detail head, beside the enable switch");
@@ -1057,6 +1098,10 @@ snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai"
     return found.length === 1 ? found[0].props["data-icon"] : "missing";
   });
   expect(idleGlyphs.every((glyph) => glyph === "link"), "an untested model must show the link glyph, got " + JSON.stringify(idleGlyphs));
+/* The hover copy is for the user: one glanceable line, never a paragraph. */
+const testHints = collect(tree, byAttr("page-model-test")).map((node) => node.props.title);
+expect(testHints.every((hint) => typeof hint === "string" && hint.length > 0 && hint.length <= 16),
+  "every test-button tooltip must stay glanceable (<=16 chars), got " + JSON.stringify(testHints));
   const discoBefore = discovered.length;
   /* the click must start the spin in its own task: the state update alone can be painted a
      frame later, by which time the request may already be done */
@@ -1093,6 +1138,10 @@ snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai"
   });
   expect(testIcons[0] === "check" && testIcons.indexOf("warn") !== -1,
     "each verdict must swap the kit glyph, got " + JSON.stringify(testIcons));
+  /* The verdict tooltip replaces the hint, so it must be just as terse. */
+  const verdictTitles = collect(tree, byAttr("page-model-test")).map((node) => node.props.title);
+  expect(verdictTitles.every((title) => typeof title === "string" && title.length <= 18),
+    "a verdict tooltip must stay a sentence fragment (<=18 chars), got " + JSON.stringify(verdictTitles));
   const lastTest = discovered[discovered.length - 1];
   expect(discovered.length === discoBefore + 2 && lastTest.request.provider === "hcnsec",
     "testing a model must ask the host about that route");
@@ -1107,13 +1156,28 @@ snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai"
   /* both row actions are the same ghost box, so a verdict can never resize one of them */
   const testBox = collect(tree, byAttr("page-model-test"))[0].props.style;
   const trashBox = collect(tree, byAttr("page-model-delete"))[0].props.style;
-  expect(testBox.height === trashBox.height && testBox.width === trashBox.width && testBox.height === 22,
-    "the test and delete buttons must share one box, got " + JSON.stringify([testBox, trashBox]));
+  expect(testBox.height === trashBox.height && testBox.width === trashBox.width
+    && testBox.height === 17 && testBox.width === 19,
+    "the test and delete buttons must share the switch-height box, got " + JSON.stringify([testBox, trashBox]));
   expect(collect(tree, byAttr("page-model-delete"))[0].props.className.indexOf("dsh-mo-act-danger") !== -1,
     "the row delete keeps the danger colour");
+  expect(String(testBox.background).indexOf("interactive-bg") !== -1
+    && trashBox.background === "transparent",
+    "the test button must read as a normal (tinted) button while the trash stays a transparent danger frame, got "
+      + JSON.stringify([testBox.background, trashBox.background]));
   expect(collect(tree, byAttr("page-model-delete"))[0].props.style.borderStyle === "solid"
     && collect(tree, byAttr("page-model-delete"))[0].props.style.borderWidth === 1,
     "row actions need a visible rounded border");
+  /* The user's report was precisely that these two did NOT match; pin the equality, not
+     each number on its own. */
+  const providerTrash = collect(tree, byAttr("page-provider-delete"))[0];
+  expect(providerTrash !== undefined && providerTrash.props.style.width === trashBox.width
+    && providerTrash.props.style.height === trashBox.height
+    && providerTrash.props.style.borderColor === trashBox.borderColor,
+    "both trash buttons must be the same box with the same red frame, got "
+      + JSON.stringify([providerTrash && providerTrash.props.style, trashBox]));
+  expect(String(trashBox.borderColor).indexOf("state-error") !== -1,
+    "the row trash must share the provider trash's red frame, got " + String(trashBox.borderColor));
   expect(marks[0] === "ok" && marks.indexOf("miss") !== -1,
     "the verdict must be per model id (listed vs not listed), got " + JSON.stringify(marks));
 

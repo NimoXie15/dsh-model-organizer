@@ -133,10 +133,28 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 
 ---
 
-## 设置页的两个 UI 陷阱（都是实机截图打回来的）
+## 设置页的 UI 约定（都是实机截图打回来的）
 
-1. **控件必须 `boxSizing: "border-box"`**。`width: "100%"` 配默认的 content-box 时，宽度是 100% 再加左右 padding(16px) 与边框(2px)，输入框直接顶出设置列 —— 实机截图里 API 地址那一栏就是这样。凡是会被拉伸的输入框/选择器/按钮都显式声明了 border-box。
-2. **不要用原生 `<select>`**。下拉列表由平台绘制，本主题下渲染成白底浅字（截图里「完全看不清」）。协议选择改成了三个自绘的 radio 样式分段按钮（`pageSegments`/`pageSegment`，选中态用 accent 边框），完整标签（含 endpoint）放在 `title` 与下方提示行里。
+### 基础两条（0.4.0）
+
+1. **控件必须 `boxSizing: "border-box"`**：`width: "100%"` 配默认 content-box 时，宽度是 100% 再加 padding 与边框，输入框会顶出设置列（实机截图里 API 地址那栏）。凡会被拉伸的输入框/选择器/按钮都显式声明 border-box。
+2. **不要用原生 `<select>`**：下拉列表由平台绘制，本主题下是白底浅字（截图里「完全看不清」）。协议选择改用三个自绘的 radio 分段按钮（`pageSegments`/`pageSegment`），完整标签放 `title` 与下方提示行。
+
+### 0.5.12：按钮的尺寸、对齐、颜色与文案
+
+- **尺寸**：三颗行内图标键（供应商删除、模型测试、模型删除）共用 `ACTION_BOX`（19×17、圆角 6、`border-l1`）。高度**刻意等于启用开关的 17**——早期 26×22 被截图指出「比开关高一头」；宽度按截图在 20 → 22 → 21 → 17 → 19 之间收敛定稿，图标 13px。
+- **对齐**：详情头部是 `align-items: baseline`。图标键与开关都没有文字基线（前者首个 flex 项是 SVG，后者是带 2px padding + 1px 边框的圆点盒），各自按自己的基线对，盒子同高却差 1–2px。两者都加 `alignSelf: "center"`：文字仍按基线排，控件按中线互相对齐。
+- **颜色**：删除键 = `DELETE_ACTION`（共享盒子 + 红框、透明底、红图标）；测速键 = `TEST_ACTION`（只覆盖 `background` 为普通按钮的浅底）。结论色只留在图标上（`.dsh-mo-act-ok/-miss/-danger`），不染边框。
+- **文案**：悬停只回答「这个按钮做什么 / 现在什么状态」，一行说完；实现细节留在本文档。冒烟测试钉「提示 ≤16 字、结论 ≤18 字」，防止长段落回流。
+
+### 按钮悬停：规则为什么只能写在注入样式表里
+
+页面与四个弹窗的按钮**静止态是内联样式**（`S.pageButton` 等），而内联样式赢过普通 `:hover`——直接写 `.foo:hover{background:…}` 会静默失效（与 0.4.0「内联背景盖掉官方 hover」是同一个坑）。做法：
+
+- 悬停/按下/禁用三态写在 `ensureOwnStyles()` 注入的样式表里，且用 `!important`（只用于这三个状态，静止态仍由内联样式负责）；
+- 作用域 `:where(page、panel、四个弹窗的 button)`：`:where()` 优先级为 0，变体规则（主要操作保持强调色、危险操作泛红、旁白按钮提亮文字）才能稳定压过通用规则；
+- **开关（`role="switch"`）显式排除**：它的底色就是开/关状态，悬停改底色会被误读成状态切换，只加 `box-shadow` 光环；
+- 关闭键（`data-mo$="-close"`）悬停时把图标提到 `label-primary`，否则只变底色看不出来。
 
 ## 已知的非插件告警：permission preset "auto"（会连带「权限选择消失」和「工具通道断」）
 
@@ -172,7 +190,7 @@ Error: permission: cannot restore preset "auto" without its active integration
 
 **症状**：在「添加模型提供商」弹窗里按 Tab，焦点跳到弹窗背后的设置页。
 
-**原因**：三个弹窗都用 `ReactDOM.createPortal` 挂到 `document.body`，在文档顺序里排在整页**之后**。两张脸：① Tab 从卡片最后一个控件继续往前走，浏览器绕回文档开头（也就是设置页的导航）；② 打开瞬间焦点没落进弹窗（宿主壳自己的 focus 流程会把刚插入的 portal 的 `focus()` 抢走），于是第一次 Tab 直接从页面上的按钮继续走。
+**原因**：每个弹窗都用 `ReactDOM.createPortal` 挂到 `document.body`，在文档顺序里排在整页**之后**。两张脸：① Tab 从卡片最后一个控件继续往前走，浏览器绕回文档开头（也就是设置页的导航）；② 打开瞬间焦点没落进弹窗（宿主壳自己的 focus 流程会把刚插入的 portal 的 `focus()` 抢走），于是第一次 Tab 直接从页面上的按钮继续走。
 
 **0.5.1 为什么没修好**：第一版只在卡片上挂 `onKeyDown`，且**只在边界**（第一个/最后一个）才 `preventDefault`。中间步骤仍交给浏览器自己走；只要焦点不在卡片里（情形②），或者边界判定没命中，浏览器就照旧走到页面上去。**教训：不能让浏览器"帮我们走一步"，必须整段接管。**
 
@@ -238,81 +256,12 @@ Error: permission: cannot restore preset "auto" without its active integration
 
 **教训**：凡是「问宿主网关」的调用，参数要和已经跑通的那条路径逐项对一遍；冒烟测试里固定断言 `request.baseURL`，防止再退化。
 
-### 0.5.6–0.5.7：按钮尺寸的两次返工（**已被 0.5.8 取代**，留作教训）
+### 0.5.6–0.5.11：行内图标键的四次返工（教训）
 
-那两版在"按钮多大"上来回改：`56×20 → 32×20 → 36×22 → 20×17`，期间还把 emoji `🗑` 换成手绘 SVG 的 `TrashIcon`，越修越不像界面里的东西。
-
-两个教训：
-
-1. **盒子高度对了不代表看起来对**：`🗑` 在 `font-size: 10` 下实际墨迹只有几像素，四周全是空白，所以"按钮很小"其实是"图标很小"。emoji 的字形尺寸和 `font-size` 不同比例，描边路径没有这个问题。
-2. **别自己画图标**：DSH 有现成的图标库（见 0.5.8），手绘 SVG 只会和界面其它按钮不是一套。
-
-（当前尺寸以 0.5.10 / 0.5.11 为准：模型行 `26×22` 带边框，供应商详情 `22×17`，测试按钮与删除按钮**同一个盒子**。）
-
-### 0.5.8：行内操作改用 DSH 自带图标库（自绘 SVG 作废）
-
-**背景**：0.5.7 手绘了一个垃圾桶 `<svg>`，虽然尺寸对了，但和界面其它按钮不是一套东西。DSH 其实自带图标库：
-
-```js
-const P = require("@deepseek-ai/dsh-client-ui-primitives");   // 官方页面就是这么拿的
-P.IconTrashOutlineRegular, P.IconPlayOutlineRegular, P.IconCheckOutlineRegular,
-P.IconWarningTriangleOutlineRegular, P.IconCloseOutlineRegular, P.IconLoadingOutlineRegular
-```
-
-这个模块由前端在模块表里注册（`dsh-web-frontend` 的 loader 表里是 `@deepseek-ai/dsh-client-ui-primitives`），共 98 个图标；插件里原有的 `icon(name, props)` 就在用它（`MenuSurface` / `rankByName` 同门），所以只差没用在按钮上。
-
-**改法**：
-
-1. 删掉自绘的 `TrashIcon`，新增 `kitIcon(name, glyph, size)`：优先 `icon(name, {size})`，取不到时退回一个同尺寸的文字 glyph（无头冒烟测试里拿不到真实模块，靠它保证布局断言仍成立）；
-2. 三个按钮都换成**无边框 ghost 图标按钮**（`S.pageIconAction` 26×22、`S.pageIconActionHead` 22×17），hover 底色与配色全部交给注入的样式表：`.dsh-mo-act` / `.dsh-mo-act-danger` / `.dsh-mo-act-ok` / `.dsh-mo-act-miss`，图标靠 `currentColor` 继承颜色；
-3. 测试按钮的**图标就是结论**：`▶` → `⟳` → `✓` / `⚠` / `✗`（同一 14px，按钮盒子不变）。删除按钮是 `IconTrashOutlineRegular`，常红；
-4. 供应商详情那颗高度仍是 17（等于启用开关），模型行两颗同为 26×22。
-
-**回归**：冒烟的 require 桩现在提供 `@deepseek-ai/dsh-client-ui-primitives`（图标组件带 `data-icon`），断言：供应商删除按钮必须是 `trash` 图标 + `dsh-mo-act-danger` + `height 17`；两行操作按钮盒子相同（26×22，`border: none`）；测试结论必须把图标换成 `check` / `warn`。
-
-### 0.5.9：测试按钮的图标语义 + 转圈动画
-
-**图标**：空闲态从 `IconPlayOutlineRegular` 换成 `IconLinkOutlineRegular`。这个动作是「去问网关它提供哪些模型」，不是「跑一次模型」，播放键会误导。结论图标不变（`IconCheckOutlineRegular` / `IconWarningTriangleOutlineRegular` / `IconCloseOutlineRegular`），进行中是 `IconLoadingOutlineRegular`。
-
-**转圈为什么不动**：kit 里的 `IconLoadingOutlineRegular` 只是一个**静态字形**，图标库不负责动画。补法写在注入的样式表里：
-
-```css
-@keyframes dsh-mo-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
-.dsh-mo-act-busy svg{animation:dsh-mo-spin .9s linear infinite}
-```
-
-（最初还有一行 `@media (prefers-reduced-motion: reduce){...animation:none}` 做无障碍降级，0.5.11 按需求删掉了。）
-
-对应地，测试按钮在 `busy` 时带上 `dsh-mo-act-busy` 类；转圈作用在 `svg` 上（不是按钮盒子），所以按钮尺寸不变。
-
-**回归**：冒烟桩补了 `IconLinkOutlineRegular`；断言未测试的行图标是 `link`、点击后**同步**变成 `loading` 且带 `dsh-mo-act-busy` 类（然后才 await 结论）、结论是 `check`/`warn`。注意断言前必须 `tree = render()`：busy 是同步 setState，但树要重渲染才看得到。
-
-### 0.5.10：按钮边框 + 「转圈看不见」的真因
-
-**边框**：两个 icon 按钮从 ghost 改回带边框的圆角矩形 —— `26×22`（r7，模型行）/ `22×17`（r6，供应商详情，高度等于开关），`1px solid var(--dsw-alias-border-l1)`，颜色仍由 `.dsh-mo-act-*` 控制。
-
-**「还是不转圈」不是动画没写，而是它只存在几十毫秒**：本地网关 50ms 就答完，而 React 会把「置为 busy」和「置为结论」两次更新合并进同一帧 —— 于是屏幕上从来没有出现过转圈那一帧。
-
-修法：`TEST_SPIN_MS = 450`，`settle()` 把结果**至少推迟到 450ms 之后**再落到状态里（`mark` 立即设 busy，结果走 `setTimeout`）。代价是慢网关不受影响（本来就 >450ms），快网关多等不到半秒。
-
-（0.5.11 起删掉了 `prefers-reduced-motion` 的降级：按需求**无论系统开没开「动画效果」都转**。）
-
-**回归**：断言按钮必须有 `borderWidth 1` / `borderStyle solid`；点击后同步进入 `busy`（`loading` 图标 + `dsh-mo-act-busy` 类），等 520ms 后必须落到非 busy 的结论。
-
-### 0.5.11：立刻开转、开没开都转
-
-**开没开都转**：删掉 `@media (prefers-reduced-motion: reduce)` 那条覆盖。注：这等于放弃无障碍降级——系统关掉「动画效果」时也会转，是产品取舍，不是疏漏。
-
-**立刻开转**：只靠 React 的 state 是不够的。`setState` 之后的那次 commit 不保证在**点击的同一帧**画出来，而请求可能在下一帧前就返回了；于是「转圈」可能一帧都没出现。做法是在点击回调里直接动 DOM（`startSpinNow`）：
-
-```js
-node.classList.add("dsh-mo-act-busy");                 // 让 CSS 规则接手
-node.querySelector("svg").style.animation = "dsh-mo-spin .9s linear infinite";  // 当场起转
-```
-
-顺序是 `stopRowEvent → startSpinNow → testModel`：先起转，再发请求。之后 React 把图标换成 `IconLoadingOutlineRegular` 时，class 还在按钮上，CSS 继续驱动新的 svg；结论到达（≥450ms）后 class 被移除，动画停。
-
-**回归**：点击时传一个假的 `currentTarget`（`classList.add` + `querySelector`），断言**同步**加了 `dsh-mo-act-busy` 且拿到了 `dsh-mo-spin` 的动画；再加上「520ms 后必须落到非 busy 结论」与「busy 图标是 loading」两条。
+- **别自己画图标**：emoji `🗑` 的墨迹远小于字号，手绘 SVG 又和界面里的东西不像；改用 DSH 自带 primitives（0.5.8，98 个图标），`kitIcon()` 取不到时退回同尺寸文字 glyph，无头测试仍能跑。
+- **尺寸别靠眼估**：盒子在 `56×20 → 32×20 → 36×22 → 20×17` 之间反复；真正的判据是「与相邻控件同高」（开关 17），最终统一 19×17（见 0.5.12）。
+- **「转圈看不见」不是动画没写**：本地网关 50ms 就答完，React 会把 busy 与结论合并进同一帧，屏幕上从未出现转圈帧。修法：点击回调里直接给 DOM 加 `dsh-mo-act-busy` 并起 CSS 动画（`startSpinNow`），结论至少 450ms 后才落状态；动画作用在 `svg` 上，按钮尺寸不变。
+- **测试连接失败先查参数**：`discoverModels()` 对目录外路由要求 `baseURL`，只发 `{ provider }` 会被宿主拒绝（0.5.5 的真因）；凡是问宿主的调用，参数与已经跑通的那条路径逐项对齐。
 
 ## 测试
 
@@ -324,14 +273,13 @@ node test/smoke.mjs        # 或 npm test
 
 为什么值得留着：座位渲染时抛错会被**静默弃权**（官方 UI 悄悄回填），在浏览器里只看到「面板不见了」。这是提交前唯一能撞出这类错误的手段；改座位注册或页面结构后先跑它。
 
-0.5.1–0.5.11 新增的覆盖面：
+0.5.1–0.5.12 新增的覆盖面：
 
 - **弹窗焦点**：卡片契约（`role=dialog` + `aria-modal` + `tabIndex -1`）、`data-mo-focus` 唯一、Tab/Shift+Tab **手动步进**与两端循环、焦点在卡片外时回拉、隐藏控件被跳过、Escape 关窗；
 - **新建供应商**：缺模型时**零写盘**并给文案、`从网关获取` 会填 id、一次 mutate 同时带 `models` 与 `apiKeyEnv`；
 - **删除**：供应商删除必须**先确认**（取消不写盘）、确认后 `unset providers.<route>` + 清派生凭据、模型删除写回剩余列表；
 - **测试连接**：请求必须带 `baseURL`、点击**同帧**起转（`dsh-mo-act-busy` + `dsh-mo-spin`）、busy 图标是 `loading`、≥450ms 后落到结论、结论把图标换成 `check`/`warn`；
-- **图标与布局**：图标必须来自 primitives 桩（断言 `data-icon`）、行内两键同一个盒子（26×22、`borderWidth 1`）。
-
+- **图标与布局**：图标来自 primitives 桩（断言 `data-icon`）；三颗图标键同一个盒子（19×17）；删除键红框、测速键浅底；悬停规则、开关光环与基线对齐（`alignSelf: center`）；悬停文案 ≤16 字、结论 ≤18 字。
 
 ### 0.4.0 验证范围
 
@@ -374,9 +322,15 @@ node test/smoke.mjs        # 或 npm test
 ```sh
 # npm 不允许覆盖已发布的版本号：先升版本，再提交，最后发布
 npm version patch        # 或手改 package.json 的 version
-git add -A && git commit -m "..." && git push
+git add -A
+git commit -m "..."
+git push origin main
+git tag v0.5.12          # 与 package.json 的 version 对齐
+git push origin v0.5.12
 npm publish
 ```
+
+发布前先 `npm whoami`：`401 Unauthorized` 说明 token 已失效（例如重置过 2FA），重新登录或按下一段换 token 再发。
 
 发布需要带 **Bypass 2FA** 的 Granular Access Token（npm 2025-11 起只支持 granular token）：npmjs.com → 头像 → Access Tokens → Generate New Token → Packages 选 **All Packages + Read and write (publish and stage)**、**Organizations 选 No access**、勾 **Bypass two-factor authentication**；然后 `npm config set //registry.npmjs.org/:_authToken=npm_xxx`（写进用户级 `.npmrc`，不要放进仓库）。
 
