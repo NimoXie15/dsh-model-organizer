@@ -138,16 +138,181 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 1. **控件必须 `boxSizing: "border-box"`**。`width: "100%"` 配默认的 content-box 时，宽度是 100% 再加左右 padding(16px) 与边框(2px)，输入框直接顶出设置列 —— 实机截图里 API 地址那一栏就是这样。凡是会被拉伸的输入框/选择器/按钮都显式声明了 border-box。
 2. **不要用原生 `<select>`**。下拉列表由平台绘制，本主题下渲染成白底浅字（截图里「完全看不清」）。协议选择改成了三个自绘的 radio 样式分段按钮（`pageSegments`/`pageSegment`，选中态用 accent 边框），完整标签（含 endpoint）放在 `title` 与下方提示行里。
 
-## 已知的非插件告警：permission preset "auto"
+## 已知的非插件告警：permission preset "auto"（会连带「权限选择消失」和「工具通道断」）
 
 ```
 dsh: warning: 1 entry did not activate permission (@deepseek-ai/dsh-permission-presets):
 Error: permission: cannot restore preset "auto" without its active integration
 ```
 
-来自官方 `dsh-permission-presets`，**与本插件无关**（本插件不写 permission 命名空间）。发布一个会话时 `pinInitialPermission()` 看到该会话的持久化事实是 `permission/preset = auto`，就要求 `autoAdmit` 存在 —— 它只能由 Auto 集成调用 `registerAuto()` 注册；当前 profile 的 bundles 里没有提供该集成的条目，于是抛错、该条目激活失败，被 loader 记成一条 warning。
+与本插件无关（本插件只写 `llm-pi-ai`，不碰 permission 命名空间）。它其实是**一个循环等待**，然后在两处现形。
 
-处置：**新建会话**（新会话用当前默认预设，不会去 restore auto），或在权限预设里把该会话切成非 auto；要保留 auto 就得装回提供 Auto 的集成（`@deepseek-ai/dsh-experimental-auto-review` 不是它）。
+**循环**：
+
+1. `dsh-permission-presets/lib/index.js` 的 `pinInitialPermission()`（L370-376）publish 会话时，若该会话的持久化事实是 `permissions.preset = "auto"`，就要求 `autoAdmit` 已存在，否则抛错；
+2. `autoAdmit` 唯一的注册点是 `registerAuto()`，唯一调用者是 `@deepseek-ai/dsh-experimental-auto-review`（其 `lib/index.js` L489）；
+3. 但 auto-review 自己 `inject: ["permissionPresets"]` —— 正是第 1 步那个条目要提供的服务。所以它**永远不可能先激活**：permission-presets 抛错 → `permissionPresets` 不注册 → auto-review 起不来 → `autoAdmit` 永远没有。**同一轮运行内不会自愈**；重启看着"好了"，只是因为新启动那一刻还没有 auto 会话被 publish，一旦又 resume 到它立刻复发。
+
+**两张脸**：
+
+- **对话栏的权限选择消失**：客户端座位 `conversation.input.permission`（`dsh-client-ui-permission-presets/lib/client.js`）里 `if (selection === void 0 || catalog === null) return null;` —— catalog 来自那条已经死掉的服务；
+- **工具通道断**（`cannot get required service "sessionProjections" in inactive context`）：cordis 的上下文代理（`cordis/lib/index.js` 的 `ReflectService.handler.get`，约 L688）在"某个 fiber 把该服务写进 `inject`、而整条 fiber 链上都找不到它"时抛这句话。`sessionProjections` 是**受害者不是凶手**（连 permission-presets 自己也 inject 它，全库约 30 个条目注入），服务图被挖洞后第一个被解析到的就是它。
+
+**触发面**：`<DSH_HOME>/storages/session_projcache/sessions/*.json` 每个会话的 `record.rows.permissions.val`。实测 42 个缓存里 32 个带该行，其中 **23 个是 `preset: "auto"`** —— 所以不是偶发。
+
+**处置**（缓存那条最稳，因为权限选择消失时 UI 里改不了）：
+
+1. 彻底退出 DSH（不是关窗口，运行中它会把内存里的旧值写回去）；
+2. 把那些缓存的 `record.rows.permissions.val` 置为 `null`（等于"没有持久化权限事实"，下次打开该会话会按当前默认预设重新 pin），每个文件先备份 `.bak`；
+3. 重开客户端 → 权限选择回来、工具通道恢复、warning 消失。
+
+备选：按会话把权限预设从 auto 改掉，或直接删掉那几个会话。真正要修的是 DSH：让 auto-review 不再 `inject permissionPresets`，或者 pin 失败时降级而不是让整个条目激活失败 —— 插件侧改不了。
+
+### 0.5.2：弹窗的焦点陷阱（第一版没修好，第二版才修对）
+
+**症状**：在「添加模型提供商」弹窗里按 Tab，焦点跳到弹窗背后的设置页。
+
+**原因**：三个弹窗都用 `ReactDOM.createPortal` 挂到 `document.body`，在文档顺序里排在整页**之后**。两张脸：① Tab 从卡片最后一个控件继续往前走，浏览器绕回文档开头（也就是设置页的导航）；② 打开瞬间焦点没落进弹窗（宿主壳自己的 focus 流程会把刚插入的 portal 的 `focus()` 抢走），于是第一次 Tab 直接从页面上的按钮继续走。
+
+**0.5.1 为什么没修好**：第一版只在卡片上挂 `onKeyDown`，且**只在边界**（第一个/最后一个）才 `preventDefault`。中间步骤仍交给浏览器自己走；只要焦点不在卡片里（情形②），或者边界判定没命中，浏览器就照旧走到页面上去。**教训：不能让浏览器"帮我们走一步"，必须整段接管。**
+
+**0.5.2 的做法**（`DialogShell`，在 `ModelsPage` 之前）：
+
+1. 卡片契约：`role="dialog"` + `aria-modal="true"` + `tabIndex:-1`（空弹窗的焦点兜底）；
+2. **整段接管 Tab**：挂载时在 `document` 的**捕获阶段**监听 `keydown`，Tab/Shift+Tab 一律 `preventDefault` + `stopPropagation`，然后由 `trapTab()` 自己按卡片内的可聚焦列表前后移动并两端循环 —— 宿主壳（以及任何别的插件）的 keydown 根本看不到这个事件；
+3. **focusin 兜底**：捕获阶段监听 `focusin`，只要有焦点落到卡片之外（别的插件抢焦点、程序化 blur、宿主壳的 focus 管理），立刻拉回卡片第一个控件；
+4. **首帧重试**：挂载时立刻聚焦 `[data-mo-focus]`（添加供应商 → 路由 ID；选模型 → 搜索框；模型详情 → 模型 ID），再用 `requestAnimationFrame` 检查一次"焦点是否真的在卡片里"，不在就再聚焦一次；
+5. `Escape` 在同一层关窗；卸载时把焦点还给打开它的元素（`isConnected` 为假就不还）。
+
+`focusableIn()`（经 `__test` 暴露）要跳过浏览器根本聚焦不到的元素（`getClientRects().length === 0`），并且容忍 `null` 根与没有 `querySelectorAll` 的假 DOM——否则无头测试会直接抛。
+
+**回归**：`test/smoke.mjs` 断言卡片契约、`data-mo-focus` 唯一性、Tab/Shift+Tab 手动前后步进与两端循环、焦点在卡片外时回拉、隐藏控件被跳过、Escape 关窗；并做过「把 Tab 分支改成直接 return → 冒烟必须失败」的反向对照。
+
+**线上验证**：`window.__dshModelOrganizerBuild` 应为 `b56`；打开添加供应商弹窗后焦点直接在「路由 ID」，反复 Tab 只在弹窗内循环。
+
+
+### 0.5.3：新建供应商必须有模型
+
+**症状**：新建供应商后宿主报 `llm-pi-ai: provider "X" resolves no models; the installed catalog does not describe this route, so its models must be listed in configuration`。
+
+**原因**（DSH 侧硬规则，`dsh-llm-pi-ai/lib/index.js` 的 `resolveRouteModels()`）：`entries = configured.length > 0 ? configured : [...catalog]`，然后 `if (entries.length === 0) invalid(provider, "resolves no models…")`。也就是说 **hand-declared 路由（目录里没有的）必须在配置里列出至少一个模型**，否则这条路由解析不出模型。我们原来的「+ 添加模型提供商」只写 `api/baseURL/displayName/apiKeyEnv`，正好踩中。
+
+**做法**：
+
+1. 新建对话框新增必填的「模型 ID」输入（逗号/空格/换行分隔，`parseModelIds()` 去空去重），与 profile、密钥引用在**同一次 mutate** 里写入（`models: [{ id }]`，只写 id，不臆造字段）；
+2. 同一对话框加「从网关获取」：用对话框里的草稿（`baseURL` + `api` + 一次性 `apiKey`）调 `remote.llm.discoverModels` —— 这条缝本来就接受"还不存在的路由"的草稿，所以能在创建前把 id 填进来；失败原样显示宿主给的原因；
+3. `writeModels()` 增加护栏：**不允许把某条路由的模型删空**（否则又回到 "resolves no models"），拒绝时给出同一条文案；
+4. 已有那种"空模型"路由的修法：打开该供应商 → 「获取可用模型」或「+ 添加模型」→ 填至少一个 ID → 保存。
+
+**回归**：冒烟测试覆盖「不带模型提交 → 零写盘 + 明确文案」「从网关获取会填 id」「带 `glm-4.6, qwen-max` 创建 → 同一次 mutate 里 `models` 为两项」。
+
+### 0.5.4：行内「测试 / 删除」与删除供应商
+
+**新增操作**：
+
+1. 供应商详情右上角、启用开关左侧：**删除供应商**（`page-provider-delete`）。走确认弹窗（`provider-delete-dialog`），确认后一次 `unset providers.<route>`，并先清掉该 profile 命名的凭据（`apiKeyEnv`，没有就用 `deriveKeyRef(route)`）；同时把本机顺序表与「停用」表里的这条路由一起清掉。**官方路由不渲染这个按钮**（它们不归本页编辑）。
+2. 每条模型行右侧：**测试**（`page-model-test`）与**删除**（`page-model-delete`）。删除 = 过滤后一次写 `models`，仍然受「不允许删空」护栏约束。
+
+**「测试连接」到底测了什么**（重要，别把它说成"发一条消息给模型"）：宿主 `llm` 的远程接口只有 `listProviders / listConfigurableProviders / discoverModels`，**没有**"发送一次请求"的能力，客户端也读不回密钥（凭据只写），所以做不到真正的补全探测。这里的做法是复用 `discoverModels(namespace, { provider, baseURL, api })`（0.5.4 只发了 `provider`，导致全线失败，见 0.5.5）：
+
+- 自建（目录里没有的）路由：宿主会真的 `GET {baseURL}/models`，带已保存的凭据 → **这一步验证了地址、协议、密钥和网关可达性**；
+- 目录已描述的路由：适配器直接回目录，不发网络请求；
+- 拿到列表后检查该行 id 是否在列表中，结论落在按钮上（`data-mo-state` = `idle | busy | ok | miss | fail`），完整原因放在按钮的 `title` 里。
+
+也就是说：**「✓ 可用」= 网关可达且列表里有这个 ID**，不代表这个 ID 真的能补全；「⚠ 不在列表」= 网关可达但没列出该 ID（多半是拼错或网关没暴露）；「✗ 失败」= 连不上/401/协议不支持（原因见 tooltip）。要做真正的补全探测，得在宿主侧加一个"试跑一次"的接口。
+
+**已知取舍**：行是 `draggable` 的，行内按钮用 `stopPropagation` 阻止冒泡到行的"打开详情"，但无法完全阻止 HTML5 从祖先元素发起拖拽（按钮很小，误拖代价也只是一次排序）。
+
+### 0.5.5：测试连接「全都失败」的真因 + 垃圾桶按钮
+
+**症状**：每个模型的「测试」都失败（红色 ✗），包括明明能正常对话的供应商。
+
+**真因**：`testModel()` 只发了 `{ provider }`，没带 `baseURL` / `api`。而 `dsh-llm-pi-ai` 的 `discoverModels()` 顺序是：
+
+1. 若 provider 在安装目录里 → 直接回目录（不发网络请求）；
+2. 否则 `if (request.baseURL === void 0 || request.baseURL.length === 0) throw "pi-ai ships no catalog for provider X, so its models can only be listed by hand"`。
+
+也就是说：**目录里没有的自建路由（本插件的用户几乎全是这种）必须带 `baseURL`**，否则宿主直接拒绝 —— 不是网络不通，是参数不全。`fetchModels()` 一直带着它，所以「获取可用模型」是好的，只有新加的「测试」漏了。
+
+**修法**：测试请求与 `fetchModels()` 对齐 —— `{ provider, baseURL, api }`（优先取详情面板里正在编辑的值，其次取已保存的 profile）；并把 `ships no catalog` 这条宿主原文映射成一句可操作的中文（先在 API 地址里填上地址再测）。
+
+**教训**：凡是「问宿主网关」的调用，参数要和已经跑通的那条路径逐项对一遍；冒烟测试里固定断言 `request.baseURL`，防止再退化。
+
+### 0.5.6–0.5.7：按钮尺寸的两次返工（**已被 0.5.8 取代**，留作教训）
+
+那两版在"按钮多大"上来回改：`56×20 → 32×20 → 36×22 → 20×17`，期间还把 emoji `🗑` 换成手绘 SVG 的 `TrashIcon`，越修越不像界面里的东西。
+
+两个教训：
+
+1. **盒子高度对了不代表看起来对**：`🗑` 在 `font-size: 10` 下实际墨迹只有几像素，四周全是空白，所以"按钮很小"其实是"图标很小"。emoji 的字形尺寸和 `font-size` 不同比例，描边路径没有这个问题。
+2. **别自己画图标**：DSH 有现成的图标库（见 0.5.8），手绘 SVG 只会和界面其它按钮不是一套。
+
+（当前尺寸以 0.5.10 / 0.5.11 为准：模型行 `26×22` 带边框，供应商详情 `22×17`，测试按钮与删除按钮**同一个盒子**。）
+
+### 0.5.8：行内操作改用 DSH 自带图标库（自绘 SVG 作废）
+
+**背景**：0.5.7 手绘了一个垃圾桶 `<svg>`，虽然尺寸对了，但和界面其它按钮不是一套东西。DSH 其实自带图标库：
+
+```js
+const P = require("@deepseek-ai/dsh-client-ui-primitives");   // 官方页面就是这么拿的
+P.IconTrashOutlineRegular, P.IconPlayOutlineRegular, P.IconCheckOutlineRegular,
+P.IconWarningTriangleOutlineRegular, P.IconCloseOutlineRegular, P.IconLoadingOutlineRegular
+```
+
+这个模块由前端在模块表里注册（`dsh-web-frontend` 的 loader 表里是 `@deepseek-ai/dsh-client-ui-primitives`），共 98 个图标；插件里原有的 `icon(name, props)` 就在用它（`MenuSurface` / `rankByName` 同门），所以只差没用在按钮上。
+
+**改法**：
+
+1. 删掉自绘的 `TrashIcon`，新增 `kitIcon(name, glyph, size)`：优先 `icon(name, {size})`，取不到时退回一个同尺寸的文字 glyph（无头冒烟测试里拿不到真实模块，靠它保证布局断言仍成立）；
+2. 三个按钮都换成**无边框 ghost 图标按钮**（`S.pageIconAction` 26×22、`S.pageIconActionHead` 22×17），hover 底色与配色全部交给注入的样式表：`.dsh-mo-act` / `.dsh-mo-act-danger` / `.dsh-mo-act-ok` / `.dsh-mo-act-miss`，图标靠 `currentColor` 继承颜色；
+3. 测试按钮的**图标就是结论**：`▶` → `⟳` → `✓` / `⚠` / `✗`（同一 14px，按钮盒子不变）。删除按钮是 `IconTrashOutlineRegular`，常红；
+4. 供应商详情那颗高度仍是 17（等于启用开关），模型行两颗同为 26×22。
+
+**回归**：冒烟的 require 桩现在提供 `@deepseek-ai/dsh-client-ui-primitives`（图标组件带 `data-icon`），断言：供应商删除按钮必须是 `trash` 图标 + `dsh-mo-act-danger` + `height 17`；两行操作按钮盒子相同（26×22，`border: none`）；测试结论必须把图标换成 `check` / `warn`。
+
+### 0.5.9：测试按钮的图标语义 + 转圈动画
+
+**图标**：空闲态从 `IconPlayOutlineRegular` 换成 `IconLinkOutlineRegular`。这个动作是「去问网关它提供哪些模型」，不是「跑一次模型」，播放键会误导。结论图标不变（`IconCheckOutlineRegular` / `IconWarningTriangleOutlineRegular` / `IconCloseOutlineRegular`），进行中是 `IconLoadingOutlineRegular`。
+
+**转圈为什么不动**：kit 里的 `IconLoadingOutlineRegular` 只是一个**静态字形**，图标库不负责动画。补法写在注入的样式表里：
+
+```css
+@keyframes dsh-mo-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+.dsh-mo-act-busy svg{animation:dsh-mo-spin .9s linear infinite}
+```
+
+（最初还有一行 `@media (prefers-reduced-motion: reduce){...animation:none}` 做无障碍降级，0.5.11 按需求删掉了。）
+
+对应地，测试按钮在 `busy` 时带上 `dsh-mo-act-busy` 类；转圈作用在 `svg` 上（不是按钮盒子），所以按钮尺寸不变。
+
+**回归**：冒烟桩补了 `IconLinkOutlineRegular`；断言未测试的行图标是 `link`、点击后**同步**变成 `loading` 且带 `dsh-mo-act-busy` 类（然后才 await 结论）、结论是 `check`/`warn`。注意断言前必须 `tree = render()`：busy 是同步 setState，但树要重渲染才看得到。
+
+### 0.5.10：按钮边框 + 「转圈看不见」的真因
+
+**边框**：两个 icon 按钮从 ghost 改回带边框的圆角矩形 —— `26×22`（r7，模型行）/ `22×17`（r6，供应商详情，高度等于开关），`1px solid var(--dsw-alias-border-l1)`，颜色仍由 `.dsh-mo-act-*` 控制。
+
+**「还是不转圈」不是动画没写，而是它只存在几十毫秒**：本地网关 50ms 就答完，而 React 会把「置为 busy」和「置为结论」两次更新合并进同一帧 —— 于是屏幕上从来没有出现过转圈那一帧。
+
+修法：`TEST_SPIN_MS = 450`，`settle()` 把结果**至少推迟到 450ms 之后**再落到状态里（`mark` 立即设 busy，结果走 `setTimeout`）。代价是慢网关不受影响（本来就 >450ms），快网关多等不到半秒。
+
+（0.5.11 起删掉了 `prefers-reduced-motion` 的降级：按需求**无论系统开没开「动画效果」都转**。）
+
+**回归**：断言按钮必须有 `borderWidth 1` / `borderStyle solid`；点击后同步进入 `busy`（`loading` 图标 + `dsh-mo-act-busy` 类），等 520ms 后必须落到非 busy 的结论。
+
+### 0.5.11：立刻开转、开没开都转
+
+**开没开都转**：删掉 `@media (prefers-reduced-motion: reduce)` 那条覆盖。注：这等于放弃无障碍降级——系统关掉「动画效果」时也会转，是产品取舍，不是疏漏。
+
+**立刻开转**：只靠 React 的 state 是不够的。`setState` 之后的那次 commit 不保证在**点击的同一帧**画出来，而请求可能在下一帧前就返回了；于是「转圈」可能一帧都没出现。做法是在点击回调里直接动 DOM（`startSpinNow`）：
+
+```js
+node.classList.add("dsh-mo-act-busy");                 // 让 CSS 规则接手
+node.querySelector("svg").style.animation = "dsh-mo-spin .9s linear infinite";  // 当场起转
+```
+
+顺序是 `stopRowEvent → startSpinNow → testModel`：先起转，再发请求。之后 React 把图标换成 `IconLoadingOutlineRegular` 时，class 还在按钮上，CSS 继续驱动新的 svg；结论到达（≥450ms）后 class 被移除，动画停。
+
+**回归**：点击时传一个假的 `currentTarget`（`classList.add` + `querySelector`），断言**同步**加了 `dsh-mo-act-busy` 且拿到了 `dsh-mo-spin` 的动画；再加上「520ms 后必须落到非 busy 结论」与「busy 图标是 loading」两条。
 
 ## 测试
 
@@ -158,6 +323,14 @@ node test/smoke.mjs        # 或 npm test
 ```
 
 为什么值得留着：座位渲染时抛错会被**静默弃权**（官方 UI 悄悄回填），在浏览器里只看到「面板不见了」。这是提交前唯一能撞出这类错误的手段；改座位注册或页面结构后先跑它。
+
+0.5.1–0.5.11 新增的覆盖面：
+
+- **弹窗焦点**：卡片契约（`role=dialog` + `aria-modal` + `tabIndex -1`）、`data-mo-focus` 唯一、Tab/Shift+Tab **手动步进**与两端循环、焦点在卡片外时回拉、隐藏控件被跳过、Escape 关窗；
+- **新建供应商**：缺模型时**零写盘**并给文案、`从网关获取` 会填 id、一次 mutate 同时带 `models` 与 `apiKeyEnv`；
+- **删除**：供应商删除必须**先确认**（取消不写盘）、确认后 `unset providers.<route>` + 清派生凭据、模型删除写回剩余列表；
+- **测试连接**：请求必须带 `baseURL`、点击**同帧**起转（`dsh-mo-act-busy` + `dsh-mo-spin`）、busy 图标是 `loading`、≥450ms 后落到结论、结论把图标换成 `check`/`warn`；
+- **图标与布局**：图标必须来自 primitives 桩（断言 `data-icon`）、行内两键同一个盒子（26×22、`borderWidth 1`）。
 
 
 ### 0.4.0 验证范围
@@ -186,13 +359,13 @@ node test/smoke.mjs        # 或 npm test
 
 调研时倾向的「portal 进官方内容列」**没有被采用**：接管靠优先级换格，因此不依赖官方 DOM 结构，也不用往官方内容列里插节点；代价是本插件自己那一格要常驻隐藏（B2 里的双向自愈）。
 
-### 设置页还没对齐截图的部分（按实施顺序）
+### 截图里剩下的差异（逐条结案）
 
-1. **行图标**：供应商行左侧图标。必须先从 primitives 的导出表核对真实名字（`IconXxxOutlineRegular` 形状），猜名会静默返回 null。
-2. **每模型行的操作图标**（0.5.0 已定）：模型行改成整行单击开「模型详情」弹窗，行上不再有「链接 / 铅笔 / 垃圾桶」三枚图标，删除收进弹窗。
-3. **每模型 / 每供应商开关**（0.5.0 已定）：pi-ai 的 `modelFields` 与 profile 都**没有** enabled/disabled 字段，所以开关落在插件侧存储（`dsh-model-organizer.hiddenProviders` / `.hiddenModels`），语义只有「从本插件的菜单里移除」；表现统一成每行左侧的绿点。
-4. **顶部「+ 添加供应商」**：新建路由要同时写 profile（baseURL/api）与凭据（`deriveKeyRef`），还要处理路由重名与 `settings/conflict` 重试。
-5. ~~**顶部右侧「切回官方页」开关**~~（已做）：本页页头右侧的「官方模型页」按钮就是它，动作是 `setTakeover(false)`（只对这一次打开设置有效）。
+1. **供应商行左侧的行图标 —— 已否决，不做**。当初的设想是给每条供应商行加一个**供应商 logo / 品牌图标**帮助辨识；结论是不做：这些图标只能按路由名去猜，猜不到就是随机图形，反而比纯文字更乱，而行首的绿点已经承担了"启用/停用"这个唯一有意义的视觉信号。（若哪天真要做，名字表是现成的：0.5.8 核对过 primitives 的 98 个图标，取不到时 `icon()` 返回 null、`kitIcon()` 有文字兜底。）
+2. **每模型行的操作图标 —— 已定（0.5.0）**：模型行改成整行单击开「模型详情」弹窗，行上不再挂「链接 / 铅笔 / 垃圾桶」三枚图标，删除收进弹窗。（0.5.4 之后行尾只保留「测试连接 + 删除」两枚，理由是这两个是高频动作。）
+3. **每模型 / 每供应商开关 —— 已定（0.5.0）**：pi-ai 的 `modelFields` 与 profile 都**没有** enabled/disabled 字段，所以开关落在插件侧存储（`dsh-model-organizer.hiddenProviders` / `.hiddenModels`），语义只有「从本插件的菜单里移除」；表现统一成每行左侧的绿点。
+4. **顶部「+ 添加供应商」—— 已做（0.5.0 起，0.5.3 补上模型必填）**：一次 mutate 同时写 profile（baseURL/api/models）与凭据引用（`deriveKeyRef`），路由重名与字符集在写之前拦；模型 ID 必填（宿主对目录外的路由硬要求），可「从网关获取」自动填。
+5. **顶部右侧「切回官方页」开关 —— 已做**：本页页头右侧的「官方模型页」按钮就是它，动作是 `setTakeover(false)`（只对这一次打开设置有效）。
 
 已对齐截图的部分：两栏主从布局、供应商分组（官方目录 / 自定义供应商，来自 `remote.llm.listConfigurableProviders`）、API 地址 / API 格式 / API 密钥三行、模型列表的增删改与拖拽、浮窗同款的悬停与抓握光标、模型列表标题右侧的「获取可用模型」（`remote.llm.discoverModels`）—— 交互与官方一致：**弹窗勾选**，只列配置里还没有的模型、默认全选、可搜索与全选/取消全选，**取消/关闭都不写配置**，只有「添加所选」才落盘，以及**模型显示名**的处理（0.4.0 不写 `name` 字段、宿主回退到 id；0.5.0 起在「模型详情」弹窗里可以直接填显示名，保存时写进该模型的 `name`）。
 

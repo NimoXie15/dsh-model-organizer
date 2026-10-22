@@ -145,9 +145,29 @@ const entry = fileURLToPath(new URL("../lib/client.js", import.meta.url));
 let factory = null;
 fakeWindow.__ModuleLoader__ = { load(spec) { factory = spec.factory; } };
 new Function(fs.readFileSync(entry, "utf8"))();
+/* The app registers this module in its loader table; the plugin reaches the shipped icon
+   kit through it, exactly like the official pages do. The stub keeps the icon identity on
+   the component so assertions can tell which glyph a button asked for. */
+const iconStub = (id) => {
+  const IconStub = function IconStub(props) {
+    return React.createElement("svg", { "data-icon": id, width: props && props.size, height: props && props.size });
+  };
+  IconStub.__dshIcon = id;
+  return IconStub;
+};
+const primitivesStub = {
+  IconTrashOutlineRegular: iconStub("trash"),
+  IconPlayOutlineRegular: iconStub("play"),
+  IconLinkOutlineRegular: iconStub("link"),
+  IconLoadingOutlineRegular: iconStub("loading"),
+  IconCheckOutlineRegular: iconStub("check"),
+  IconWarningTriangleOutlineRegular: iconStub("warn"),
+  IconCloseOutlineRegular: iconStub("close")
+};
 const plugin = factory((name) => {
   if (name === "react") return React;
   if (name === "react-dom") return { createPortal: (node) => node };
+  if (name === "@deepseek-ai/dsh-client-ui-primitives") return primitivesStub;
   throw new Error("module not available in this harness: " + name);
 });
 
@@ -408,8 +428,10 @@ expect(modelRows.every((row) => typeof row.props.className === "string" && row.p
 expect(modelRows.every((row) => row.props.style === undefined), "an enabled model row must not inline a background that would beat the hover rule");
 expect(modelRows.every((row) => typeof row.props.onDragStart === "function" && typeof row.props.onDrop === "function" && typeof row.props.onDragOver === "function"),
   "each model row must wire drag start/over/drop");
-expect(modelRows.every((row) => Array.isArray(row.props.children) && row.props.children.length === 3),
-  "each model row must be one line: dot, name, chips");
+expect(modelRows.every((row) => Array.isArray(row.props.children) && row.props.children.length === 4),
+  "each model row must be one line: dot, name, chips, actions");
+expect(modelRows.every((row) => collect(row, byAttr("page-model-test")).length === 1 && collect(row, byAttr("page-model-delete")).length === 1),
+  "each model row must carry a test button and a delete button");
 expect(modelRows.every((row) => collect(row, (node) => node.type === "input").length === 0),
   "no input may live inside a model row");
 const rowDots = collect(tree, byAttr("page-model-dot"));
@@ -754,6 +776,24 @@ collect(tree, byAttr("add-api-option")).filter((node) => node.props["data-mo-id"
 tree = render();
 collect(tree, byAttr("add-key"))[0].props.onChange({ target: { value: "sk-gw" } });
 tree = render();
+
+/* The dialog can pull the ids from the gateway before the route exists (the discovery
+   seam takes a draft), and it refuses to create a route with no models at all — a
+   hand-declared route with an empty models list cannot resolve on the host. */
+collect(tree, byAttr("add-fetch"))[0].props.onClick();
+await tick();
+tree = render();
+expect(collect(tree, byAttr("add-models"))[0].props.value.indexOf("DeepSeek-V4-Flash") !== -1,
+  "fetch-from-gateway must fill the model ids from the draft, got " + String(collect(tree, byAttr("add-models"))[0].props.value));
+collect(tree, byAttr("add-models"))[0].props.onChange({ target: { value: "" } });
+tree = render();
+collect(tree, byAttr("add-submit"))[0].props.onClick();
+await tick();
+tree = render();
+expect(mutations.length === opsBefore, "a declared route with no models must not reach the host");
+expect(flattenText(tree).join(" ").indexOf("至少要填一个模型 ID") !== -1, "the missing models must be explained");
+collect(tree, byAttr("add-models"))[0].props.onChange({ target: { value: "glm-4.6, qwen-max" } });
+tree = render();
 collect(tree, byAttr("add-submit"))[0].props.onClick();
 await tick();
 tree = render();
@@ -765,6 +805,9 @@ if (created !== undefined && created.ops.length === 2) {
     "the profile must carry exactly what was typed: " + JSON.stringify(created.ops[0].value));
   expect(created.ops[1].path.join("/") === "providers/my-gateway/apiKeyEnv" && created.ops[1].value === "MY_GATEWAY_API_KEY",
     "the key reference must be derived from the route: " + JSON.stringify(created.ops[1]));
+  const createdModels = created.ops[0].value.models;
+  expect(Array.isArray(createdModels) && createdModels.length === 2 && createdModels[0].id === "glm-4.6" && createdModels[1].id === "qwen-max",
+    "the profile must list the typed models: " + JSON.stringify(createdModels));
 }
 expect(credentialWrites.some((row) => row.ref === "MY_GATEWAY_API_KEY" && row.value === "sk-gw"), "the secret must go to the credentials service");
 expect(collect(tree, byAttr("add-dialog")).length === 0, "a successful create must close the dialog");
@@ -887,7 +930,204 @@ expect(flattenText(lonelyPanel).join(" ").indexOf("没有顺序需要调整") !=
   "the empty panel must explain why there is no list, got " + flattenText(lonelyPanel).join(" "));
 const lonelyLink = collect(lonelyPanel, byAttr("panel-open-organizer"))[0];
 expect(lonelyLink !== undefined && typeof lonelyLink.props.onClick === "function", "the lonely panel's link must stay wired");
+/* ---- dialog focus contract -------------------------------------------------
+   Every dialog is portalled to <body>, so its nodes come AFTER the settings page in the
+   document's tab order. Without a trap, Tab past the last field walks into the page
+   behind the backdrop (the reported bug). These assertions pin the shell that prevents
+   it: the card owns role/aria-modal/tabIndex/keydown, one field carries the initial
+   focus, Tab wraps at both ends and re-enters from outside, and Escape closes. */
+{
+  const cardOf = (tree) => collect(tree, (node) => node.props && node.props.role === "dialog")[0];
+  const focusTargetOf = (card) => collect(card, (node) => node.props && node.props["data-mo-focus"] === "true");
+  const focusables = [{ hit: false, focus() { this.hit = true; } }, { hit: false, focus() { this.hit = true; } }];
+  const trapCard = { querySelectorAll: () => focusables, contains: (node) => focusables.indexOf(node) !== -1 };
+  let prevented = 0;
+  const press = (card, key, shiftKey, active) => {
+    prevented = 0;
+    fakeDocument.activeElement = active === undefined ? document.body : active;
+    card.props.onKeyDown({ key: key, shiftKey: shiftKey, currentTarget: trapCard, preventDefault() { prevented += 1; }, stopPropagation() {} });
+  };
+
+  let tree = render();
+  collect(tree, byAttr("page-model-add"))[0].props.onClick();
+  const modelCard = cardOf(render());
+  expect(modelCard !== undefined, "the model dialog must render a role=dialog card");
+  expect(modelCard.props["aria-modal"] === "true", "the dialog card must declare aria-modal");
+  expect(modelCard.props.tabIndex === -1, "the dialog card must be a focus fallback");
+  expect(typeof modelCard.props.onKeyDown === "function", "the dialog card must own the keydown handler");
+  const modelFocus = focusTargetOf(modelCard);
+  expect(modelFocus.length === 1 && modelFocus[0].props["data-mo"] === "model-dialog-id",
+    "exactly one control must take the initial focus, got " + modelFocus.map((node) => node.props["data-mo"]).join(","));
+
+  focusables[0].hit = false; focusables[1].hit = false;
+  press(modelCard, "Tab", false, focusables[1]);
+  expect(prevented === 1 && focusables[0].hit === true, "Tab on the last control must wrap to the first");
+  focusables[0].hit = false; focusables[1].hit = false;
+  press(modelCard, "Tab", true, focusables[0]);
+  expect(prevented === 1 && focusables[1].hit === true, "Shift+Tab on the first control must wrap to the last");
+  focusables[0].hit = false; focusables[1].hit = false;
+  press(modelCard, "Tab", false, undefined);
+  expect(prevented === 1 && focusables[0].hit === true, "Tab from outside the card must re-enter it");
+  focusables[0].hit = false; focusables[1].hit = false;
+  press(modelCard, "Tab", false, focusables[0]);
+  expect(prevented === 1 && focusables[1].hit === true, "Tab inside the card must step to the next control (manual, never the browser's walk)");
+  focusables[0].hit = false; focusables[1].hit = false;
+  press(modelCard, "Tab", true, focusables[1]);
+  expect(prevented === 1 && focusables[0].hit === true, "Shift+Tab must step back one control");
+  fakeDocument.activeElement = undefined;
+
+  press(modelCard, "Escape", false, focusables[0]);
+  expect(collect(render(), byAttr("model-dialog")).length === 0, "Escape must close the details dialog");
+
+  /* The add-provider dialog carries the same shell and focuses its route id. */
+  const fresh = render();
+  collect(fresh, byAttr("page-provider-add"))[0].props.onClick();
+  const addCard = cardOf(render());
+  expect(addCard !== undefined && addCard.props["aria-modal"] === "true" && addCard.props.tabIndex === -1,
+    "the add-provider dialog must use the same card contract");
+  const addFocus = focusTargetOf(addCard);
+  expect(addFocus.length === 1 && addFocus[0].props["data-mo"] === "add-route",
+    "the add-provider dialog must focus the route id, got " + addFocus.map((node) => node.props["data-mo"]).join(","));
+  press(addCard, "Escape", false, focusables[0]);
+  expect(collect(render(), byAttr("add-dialog")).length === 0, "Escape must close the add-provider dialog");
+
+  /* focusableIn is the pure seam behind the trap; its null/undefined paths must not throw. */
+  const focusableIn = plugin.__test && plugin.__test.focusableIn;
+  expect(typeof focusableIn === "function", "focusableIn must be exported for the harness");
+  expect(focusableIn(null).length === 0 && focusableIn(undefined).length === 0, "focusableIn must tolerate a missing root");
+  expect(focusableIn({}).length === 0, "focusableIn must tolerate a root without querySelectorAll");
+  const fakeRoot = { querySelectorAll: (selector) => (selector.indexOf("button") !== -1 ? ["one", "two"] : []) };
+  expect(focusableIn(fakeRoot).join(",") === "one,two", "focusableIn must return the matched nodes in order");
+  const hiddenNode = { getClientRects: () => [] };
+  const mixedRoot = { querySelectorAll: () => ["visible", hiddenNode] };
+  expect(focusableIn(mixedRoot).length === 1, "focusableIn must skip a control the browser cannot focus");
+}
+
 snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai", revision: 4, user: null, value: { providers: { hcnsec: providerA, jiyuan: providerB, zhipu: providerC } } }] } };
+
+/* ---- destructive + diagnostic row actions ---------------------------------
+   A route delete asks first (it takes the profile and this page's derived credential with
+   it); a model test asks the host which models the route serves and reports a verdict on
+   the row; a model delete rewrites the list without that row. */
+{
+  snapshot = { view: { writable: true, revision: 6, namespaces: [{ ns: "llm-pi-ai", revision: 6, value: { providers: { hcnsec: providerA, jiyuan: providerB, zhipu: providerC } } }] } };
+  let tree = render();
+  const deleteProvider = collect(tree, byAttr("page-provider-delete"))[0];
+  expect(deleteProvider !== undefined, "the provider card needs a delete button");
+  expect(String(deleteProvider.props.title || "").indexOf("删除") !== -1
+    && collect(deleteProvider, (node) => node.props && node.props["data-icon"] === "trash").length === 1,
+    "the provider delete button must use the shipped IconTrashOutlineRegular");
+  expect(deleteProvider.props.style.height === 17 && String(deleteProvider.props.className).indexOf("dsh-mo-act-danger") !== -1,
+    "the provider trash must match the switch height and carry the danger colour");
+  const head = parentOf(tree, byAttr("page-provider-delete"));
+  expect(head !== undefined && collect(head, (node) => node.props && node.props.role === "switch").length === 1,
+    "the delete button must live in the detail head, beside the enable switch");
+
+  const opsBeforeDelete = mutations.length;
+  deleteProvider.props.onClick();
+  tree = render();
+  expect(collect(tree, byAttr("provider-delete-dialog")).length === 1, "deleting a provider must ask for confirmation first");
+  collect(tree, byAttr("provider-delete-cancel"))[0].props.onClick();
+  tree = render();
+  expect(collect(tree, byAttr("provider-delete-dialog")).length === 0 && mutations.length === opsBeforeDelete,
+    "cancelling the confirmation must not touch the config");
+
+  collect(tree, byAttr("page-provider-delete"))[0].props.onClick();
+  tree = render();
+  const clearsBefore = credentialClears.length;
+  collect(tree, byAttr("provider-delete-confirm"))[0].props.onClick();
+  await tick();
+  const removal = mutations[mutations.length - 1];
+  expect(removal !== undefined && removal.ops.length === 1 && removal.ops[0].op === "unset" && removal.ops[0].path.join("/") === "providers/hcnsec",
+    "confirming must unset exactly that profile: " + JSON.stringify(removal));
+  expect(credentialClears.length === clearsBefore + 1 && credentialClears[credentialClears.length - 1] === "HCNSEC_API_KEY",
+    "deleting a route must clear the credential this page derived: " + JSON.stringify(credentialClears.slice(-1)));
+
+  /* per-model test: the harness host lists two ids, so one row verifies and one does not.
+     The host snapshot is static here, so re-select the route the delete just dropped from
+     the local order (in a real host the next describe would simply not list it). */
+  tree = render();
+  const stillListed = collect(tree, byAttr("page-provider")).filter((node) => node.props["data-mo-id"] === "hcnsec")[0];
+  expect(stillListed !== undefined, "the harness snapshot still lists the route it just unset");
+  stillListed.props.onClick();
+  tree = render();
+  const modelIds = collect(tree, byAttr("page-model")).map((node) => node.props["data-mo-id"]);
+  const idleGlyphs = collect(tree, byAttr("page-model-test")).map((node) => {
+    const found = collect(node, (child) => child.props && typeof child.props["data-icon"] === "string");
+    return found.length === 1 ? found[0].props["data-icon"] : "missing";
+  });
+  expect(idleGlyphs.every((glyph) => glyph === "link"), "an untested model must show the link glyph, got " + JSON.stringify(idleGlyphs));
+  const discoBefore = discovered.length;
+  /* the click must start the spin in its own task: the state update alone can be painted a
+     frame later, by which time the request may already be done */
+  const spun = { classes: [], animated: false };
+  const spinTarget = {
+    classList: { add: (name) => spun.classes.push(name) },
+    querySelector: () => ({ style: { set animation(value) { spun.animated = value.indexOf("dsh-mo-spin") !== -1; } } })
+  };
+  collect(tree, byAttr("page-model-test"))[0].props.onClick({ stopPropagation() {}, currentTarget: spinTarget });
+  expect(spun.classes.indexOf("dsh-mo-act-busy") !== -1 && spun.animated === true,
+    "clicking must start the spin synchronously: " + JSON.stringify(spun));
+  tree = render();   /* the busy state is set synchronously, before the discovery promise */
+  /* the idle glyph is the kit's link icon — this button asks the gateway, it does not run
+     a model — and the busy glyph must be the loading one, inside the spinning class */
+  const idleIcon = collect(collect(tree, byAttr("page-model-test"))[0], (node) => node.props && typeof node.props["data-icon"] === "string");
+  expect(idleIcon.length === 1 && idleIcon[0].props["data-icon"] === "loading",
+    "clicking must swap the glyph to the loading spinner at once, got " + JSON.stringify(idleIcon.map((node) => node.props["data-icon"])));
+  const busyButton = collect(tree, byAttr("page-model-test"))[0];
+  expect(busyButton.props["data-mo-state"] === "busy" && String(busyButton.props.className).indexOf("dsh-mo-act-busy") !== -1,
+    "the busy state must carry the class the spin animation is attached to");
+  /* the busy paint is held on purpose so the spin is visible even against a fast gateway */
+  await new Promise((resolve) => setTimeout(resolve, 520));
+  tree = render();
+  expect(collect(tree, byAttr("page-model-test"))[0].props["data-mo-state"] !== "busy",
+    "the verdict must land once the minimum spin time elapsed");
+  tree = render();
+  collect(tree, byAttr("page-model-test"))[1].props.onClick({ stopPropagation() {} });
+  await new Promise((resolve) => setTimeout(resolve, 520));
+  tree = render();
+  const marks = collect(tree, byAttr("page-model-test")).map((node) => node.props["data-mo-state"]);
+  const testIcons = collect(tree, byAttr("page-model-test")).map((node) => {
+    const found = collect(node, (child) => child.props && typeof child.props["data-icon"] === "string");
+    return found.length === 1 ? found[0].props["data-icon"] : "missing";
+  });
+  expect(testIcons[0] === "check" && testIcons.indexOf("warn") !== -1,
+    "each verdict must swap the kit glyph, got " + JSON.stringify(testIcons));
+  const lastTest = discovered[discovered.length - 1];
+  expect(discovered.length === discoBefore + 2 && lastTest.request.provider === "hcnsec",
+    "testing a model must ask the host about that route");
+  /* a catalog-less route is only testable when the draft carries its endpoint, otherwise
+     the host refuses with "ships no catalog for provider X" — the bug that made every
+     test fail */
+  expect(lastTest.request.baseURL === "https://api.hcnsec.cn/v1",
+    "the test must carry the route's baseURL: " + JSON.stringify(lastTest.request));
+  expect(typeof collect(tree, byAttr("page-model-test"))[0].props.style.width === "number"
+    && collect(tree, byAttr("page-model-test"))[0].props.style.width === collect(tree, byAttr("page-model-test"))[1].props.style.width,
+    "the test button must keep one fixed size");
+  /* both row actions are the same ghost box, so a verdict can never resize one of them */
+  const testBox = collect(tree, byAttr("page-model-test"))[0].props.style;
+  const trashBox = collect(tree, byAttr("page-model-delete"))[0].props.style;
+  expect(testBox.height === trashBox.height && testBox.width === trashBox.width && testBox.height === 22,
+    "the test and delete buttons must share one box, got " + JSON.stringify([testBox, trashBox]));
+  expect(collect(tree, byAttr("page-model-delete"))[0].props.className.indexOf("dsh-mo-act-danger") !== -1,
+    "the row delete keeps the danger colour");
+  expect(collect(tree, byAttr("page-model-delete"))[0].props.style.borderStyle === "solid"
+    && collect(tree, byAttr("page-model-delete"))[0].props.style.borderWidth === 1,
+    "row actions need a visible rounded border");
+  expect(marks[0] === "ok" && marks.indexOf("miss") !== -1,
+    "the verdict must be per model id (listed vs not listed), got " + JSON.stringify(marks));
+
+  /* per-model delete: the rest of the list is written back */
+  const opsBeforeModelDelete = mutations.length;
+  collect(tree, byAttr("page-model-delete"))[0].props.onClick({ stopPropagation() {} });
+  await tick();
+  const write = mutations[mutations.length - 1];
+  expect(mutations.length === opsBeforeModelDelete + 1 && write.ops.length === 1 && write.ops[0].path.join("/") === "providers/hcnsec/models",
+    "deleting a model must write the models array: " + JSON.stringify(write));
+  const remaining = write.ops[0].value.map((row) => row.id);
+  expect(remaining.indexOf(modelIds[0]) === -1 && remaining.length === modelIds.length - 1,
+    "the deleted model must leave the config: " + JSON.stringify(remaining));
+}
 
 officialPriority = -5;   /* the shipped entry may sit anywhere; ours must be relative */
 const restarts = [];
@@ -911,5 +1151,5 @@ if (failures.length > 0) {
   console.error("FAIL\n - " + failures.join("\n - "));
   process.exitCode = 1;
 } else {
-  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified");
+  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified");
 }
