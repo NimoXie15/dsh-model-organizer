@@ -1,6 +1,6 @@
 {
   "name": "@nimoxie/dsh-model-organizer",
-  "version": "0.5.12",
+  "version": "0.5.19",
   "description": "DSH 模型整理插件：输入框模型菜单按供应商分组并可拖拽排序；接管设置里的「模型」页——直接编辑供应商与模型、获取可用模型、添加/删除路由。",
   "type": "module",
   "scripts": {

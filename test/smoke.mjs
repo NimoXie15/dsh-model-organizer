@@ -231,7 +231,9 @@ const scope = {
              read-only, because this page could never edit its settings. */
           { provider: "deepseek-official", displayName: "DeepSeek 官方", settingsNs: "", declared: true },
           { provider: "hcnsec", displayName: "hcnsec", settingsNs: "llm-pi-ai", settingsPath: ["providers", "hcnsec"], declared: true },
-          { provider: "zhipu", displayName: "智谱", settingsNs: "llm-pi-ai", settingsPath: ["providers", "zhipu"], declared: false }
+          { provider: "zhipu", displayName: "智谱", settingsNs: "llm-pi-ai", settingsPath: ["providers", "zhipu"], declared: false },
+          /* Declared by the shipped catalog, not configured yet: the third-party preset. */
+          { provider: "kimi", displayName: "Kimi", settingsNs: "llm-pi-ai", settingsPath: ["providers", "kimi"], declared: false, defaultBaseURL: "https://api.moonshot.cn/v1" }
         ]
       })
     }
@@ -780,9 +782,24 @@ const opsBefore = mutations.length;
 addProviderButton.props.onClick();
 tree = render();
 expect(collect(tree, byAttr("add-dialog")).length === 1, "clicking must open the create dialog");
+/* dialogs move by their header and never close on a backdrop click */
+const addCard = collect(tree, byAttr("add-dialog"))[0];
+expect(addCard.props.onMouseDown === undefined, "the backdrop must not close the dialog any more");
+const head = collect(addCard, (node) => node.props && node.props["data-mo-drag"] === "true");
+expect(head.length === 1 && head[0].props.style.cursor === "move", "each dialog header must be the drag handle");
+const addCardInner = collect(addCard, (node) => node.props && node.props.role === "dialog")[0];
+expect(addCardInner !== undefined && typeof addCardInner.props.onMouseDown === "function", "the card must carry the drag handler");
+expect(String(addCardInner.props.style.transform).indexOf("translate(0px, 0px)") !== -1, "drag starts at the resting offset");
 collect(tree, byAttr("add-submit"))[0].props.onClick();
 await tick();
 tree = render();
+/* the manual-entry control must sit BESIDE its input, not wrap under it */
+const modelIdRow = parentOf(tree, byAttr("add-model-add"));
+expect(modelIdRow !== undefined && modelIdRow.props.style.flexWrap === "nowrap",
+  "the add-by-id control must stay on the same line as its input");
+expect(collect(modelIdRow, byAttr("add-models"))[0].props.style.width === "auto"
+  && collect(modelIdRow, byAttr("add-models"))[0].props.style.flex === "1 1 auto",
+  "the id input must grow instead of taking the whole row");
 expect(mutations.length === opsBefore, "an empty route must not reach the host");
 expect(flattenText(tree).join(" ").indexOf("路由 ID 不能为空") !== -1, "the refusal must be explained");
 collect(tree, byAttr("add-route"))[0].props.onChange({ target: { value: "hcnsec" } });
@@ -806,13 +823,24 @@ tree = render();
 /* The dialog can pull the ids from the gateway before the route exists (the discovery
    seam takes a draft), and it refuses to create a route with no models at all — a
    hand-declared route with an empty models list cannot resolve on the host. */
+/* 「获取可用模型」opens the same picker; picking fills this dialog only — nothing is
+   written before Create, which is what keeps the mandatory models rule honest. */
 collect(tree, byAttr("add-fetch"))[0].props.onClick();
 await tick();
 tree = render();
-expect(collect(tree, byAttr("add-models"))[0].props.value.indexOf("DeepSeek-V4-Flash") !== -1,
-  "fetch-from-gateway must fill the model ids from the draft, got " + String(collect(tree, byAttr("add-models"))[0].props.value));
-collect(tree, byAttr("add-models"))[0].props.onChange({ target: { value: "" } });
+expect(collect(tree, byAttr("fetch-dialog")).length === 1, "the create dialog must reuse the shared picker");
+expect(collect(tree, byAttr("fetch-item")).length >= 2, "the picker must list what the gateway advertised");
+collect(tree, byAttr("fetch-adopt"))[0].props.onClick();
 tree = render();
+const adopted = collect(tree, byAttr("add-model-item")).map((node) => node.props["data-mo-id"]);
+expect(adopted.indexOf("DeepSeek-V4-Flash") !== -1, "adopting must fill the create dialog list, got " + JSON.stringify(adopted));
+expect(mutations.length === opsBefore, "picking models must not write anything before Create");
+/* emptying the list is refused with the same sentence the list page uses */
+for (const id of adopted.slice().reverse()) {
+  collect(tree, byAttr("add-model-remove")).filter((node) => node.props["data-mo-id"] === id)[0].props.onClick();
+  tree = render();
+}
+expect(collect(tree, byAttr("add-model-item")).length === 0, "removing must clear the draft list");
 collect(tree, byAttr("add-submit"))[0].props.onClick();
 await tick();
 tree = render();
@@ -820,6 +848,9 @@ expect(mutations.length === opsBefore, "a declared route with no models must not
 expect(flattenText(tree).join(" ").indexOf("至少要填一个模型 ID") !== -1, "the missing models must be explained");
 collect(tree, byAttr("add-models"))[0].props.onChange({ target: { value: "glm-4.6, qwen-max" } });
 tree = render();
+collect(tree, byAttr("add-model-add"))[0].props.onClick();
+tree = render();
+expect(collect(tree, byAttr("add-model-item")).length === 2, "manual ids must join the draft list");
 collect(tree, byAttr("add-submit"))[0].props.onClick();
 await tick();
 tree = render();
@@ -837,6 +868,51 @@ if (created !== undefined && created.ops.length === 2) {
 }
 expect(credentialWrites.some((row) => row.ref === "MY_GATEWAY_API_KEY" && row.value === "sk-gw"), "the secret must go to the credentials service");
 expect(collect(tree, byAttr("add-dialog")).length === 0, "a successful create must close the dialog");
+
+/* third-party presets: the same dialog offers the shipped catalog, and creating one
+   writes an EMPTY profile — its address, protocol and models come from the catalog. */
+collect(tree, byAttr("page-provider-add"))[0].props.onClick();
+tree = render();
+expect(collect(tree, byAttr("add-preset")).length === 0, "the custom body must not render the preset select");
+const modeOptions = collect(tree, byAttr("add-mode-option"));
+expect(modeOptions.length === 2, "the create dialog must offer both modes when presets exist, got " + modeOptions.length);
+modeOptions.filter((node) => node.props["data-mo-id"] === "catalog")[0].props.onClick();
+tree = render();
+expect(collect(tree, byAttr("add-dialog")).length === 1, "both modes must live in one dialog, not two");
+expect(collect(tree, byAttr("add-route")).length === 0 && collect(tree, byAttr("add-models")).length === 0,
+  "the preset body must hide the custom-only fields");
+const presetSelect = collect(tree, byAttr("add-preset"))[0];
+expect(presetSelect !== undefined, "the preset mode needs a provider select");
+const presetIds = (presetSelect.props.children || []).map((option) => option.props.value).filter((value) => value !== "");
+expect(presetIds.indexOf("kimi") !== -1, "the select must list the unconfigured catalog provider, got " + JSON.stringify(presetIds));
+const opsBeforePreset = mutations.length;
+collect(tree, byAttr("add-preset"))[0].props.onChange({ target: { value: "kimi" } });
+tree = render();
+collect(tree, byAttr("add-submit"))[0].props.onClick();
+await tick();
+tree = render();
+const presetWrite = mutations[mutations.length - 1];
+expect(mutations.length === opsBeforePreset + 1 && presetWrite.ops.length === 1 && presetWrite.ops[0].path.join("/") === "providers/kimi",
+  "creating a preset must set exactly that profile: " + JSON.stringify(presetWrite));
+expect(presetWrite.ops[0].value.models === undefined,
+  "a preset profile must not list models (the catalog supplies them): " + JSON.stringify(presetWrite.ops[0].value));
+expect(collect(tree, byAttr("add-dialog")).length === 0, "a successful preset create must close the dialog");
+
+/* a route the document leaves empty still serves models: they come from the catalog and
+   are shown read-only, never as editable rows. */
+{
+  const before = discovered.length;
+  snapshot = { view: { writable: true, revision: 7, namespaces: [{ ns: "llm-pi-ai", revision: 7, value: { providers: { bare: {} } } }] } };
+  tree = render();
+  await tick();
+  await tick();
+  tree = render();
+  const inherited = collect(tree, byAttr("page-model-inherited"));
+  expect(discovered.length === before + 1 && inherited.length >= 2,
+    "a catalog-served route must list the catalog models, got " + inherited.length + " rows");
+  expect(collect(tree, byAttr("page-inherited-hint")).length === 1, "the inherited rows must say where they come from");
+  expect(collect(tree, byAttr("page-model")).length === 0, "inherited rows must not be editable rows");
+}
 
 /* B3: crossing to the shipped Models page happens through the settings nav, because
    the shell keeps `openSection` private and its cells carry no id — only a label. */
@@ -1191,6 +1267,26 @@ expect(testHints.every((hint) => typeof hint === "string" && hint.length > 0 && 
   const remaining = write.ops[0].value.map((row) => row.id);
   expect(remaining.indexOf(modelIds[0]) === -1 && remaining.length === modelIds.length - 1,
     "the deleted model must leave the config: " + JSON.stringify(remaining));
+}
+
+/* the mode row must always be reachable: with every catalog provider already configured,
+   the preset side is disabled instead of silently disappearing (that read as a missing
+   feature in the real UI). */
+{
+  snapshot = { view: { writable: true, revision: 9, namespaces: [{ ns: "llm-pi-ai", revision: 9, value: { providers: { hcnsec: providerA, kimi: {}, zhipu: {} } } }] } };
+  tree = render();
+  await tick();
+  tree = render();
+  collect(tree, byAttr("page-provider-add"))[0].props.onClick();
+  tree = render();
+  const modes = collect(tree, byAttr("add-mode-option"));
+  expect(modes.length === 2, "the add mode row must stay visible, got " + modes.length);
+  const catalogMode = modes.filter((node) => node.props["data-mo-id"] === "catalog")[0];
+  expect(catalogMode !== undefined && catalogMode.props.disabled === true && String(catalogMode.props.title).length > 0,
+    "with nothing addable the preset side must be disabled and explain why");
+  expect(modes.filter((node) => node.props["data-mo-id"] === "custom")[0].props.disabled !== true,
+    "the custom side must stay selectable");
+  collect(tree, byAttr("add-cancel"))[0].props.onClick();
 }
 
 officialPriority = -5;   /* the shipped entry may sit anywhere; ours must be relative */

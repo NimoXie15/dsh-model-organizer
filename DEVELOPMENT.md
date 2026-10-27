@@ -144,7 +144,7 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 
 - **尺寸**：三颗行内图标键（供应商删除、模型测试、模型删除）共用 `ACTION_BOX`（19×17、圆角 6、`border-l1`）。高度**刻意等于启用开关的 17**——早期 26×22 被截图指出「比开关高一头」；宽度按截图在 20 → 22 → 21 → 17 → 19 之间收敛定稿，图标 13px。
 - **对齐**：详情头部是 `align-items: baseline`。图标键与开关都没有文字基线（前者首个 flex 项是 SVG，后者是带 2px padding + 1px 边框的圆点盒），各自按自己的基线对，盒子同高却差 1–2px。两者都加 `alignSelf: "center"`：文字仍按基线排，控件按中线互相对齐。
-- **颜色**：删除键 = `DELETE_ACTION`（共享盒子 + 红框、透明底、红图标）；测速键 = `TEST_ACTION`（只覆盖 `background` 为普通按钮的浅底）。结论色只留在图标上（`.dsh-mo-act-ok/-miss/-danger`），不染边框。
+- **颜色**：删除键 = `DELETE_ACTION`（共享盒子 + 红框、透明底、红图标）；测试连接键 = `TEST_ACTION`（只覆盖 `background` 为普通按钮的浅底）。结论色只留在图标上（`.dsh-mo-act-ok/-miss/-danger`），不染边框。
 - **文案**：悬停只回答「这个按钮做什么 / 现在什么状态」，一行说完；实现细节留在本文档。冒烟测试钉「提示 ≤16 字、结论 ≤18 字」，防止长段落回流。
 
 ### 按钮悬停：规则为什么只能写在注入样式表里
@@ -263,6 +263,68 @@ Error: permission: cannot restore preset "auto" without its active integration
 - **「转圈看不见」不是动画没写**：本地网关 50ms 就答完，React 会把 busy 与结论合并进同一帧，屏幕上从未出现转圈帧。修法：点击回调里直接给 DOM 加 `dsh-mo-act-busy` 并起 CSS 动画（`startSpinNow`），结论至少 450ms 后才落状态；动画作用在 `svg` 上，按钮尺寸不变。
 - **测试连接失败先查参数**：`discoverModels()` 对目录外路由要求 `baseURL`，只发 `{ provider }` 会被宿主拒绝（0.5.5 的真因）；凡是问宿主的调用，参数与已经跑通的那条路径逐项对齐。
 
+### 0.5.13–0.5.14：新建弹窗里的模型改成「清单 + 勾选」
+
+**问题**：0.5.3 为了让「必须列出模型」这条宿主规则可满足，把「从网关获取」做成了**一次性把网关返回的所有 id 灌进输入框**。这和官方交互相反（官方是弹窗勾选、点添加才落盘），用户也没得选。
+
+**做法**：
+
+1. `addDialog.models` 从字符串改成**草稿数组**（每项 `{id, context, maxTokens, vision}`），另加 `modelInput` 只承载手工输入；
+2. 手工添加：`parseModelIds(modelInput)` → `addModelsToDraft()` 去空去重后追加，输入框清空；
+3. 「获取可用模型」：用对话框里的草稿（`baseURL` + `api` + 一次性 `apiKey`）调 `discoverModels`，候选塞进**同一个 picker**，只是多带一个 `target: "draft"`；
+4. `fetch-adopt` 分叉：`target === "draft"` → 只回填弹窗清单（**不写盘**）；否则维持 `writeModels(draftRows.concat(chosen))`；
+5. 清单在弹窗里逐行展示（id + 容量/视觉 chips + 🗑 移除），空清单显示提示；
+6. `createProvider()` 改用 `modelsFromDraft()` 统一校验（空 ID / 重复 / 容量非法都在写盘前拒），profile 写成 `{ api, models: built.models }`。
+
+**为什么复用 picker**：同一个弹窗、同一套搜索/全选/勾选，draft 与 saved 的唯一差别是「采纳之后去哪」，用 `target` 区分，避免第二套弹窗各写一份逻辑。
+
+**0.5.14（同一处的排版）**：手工输入框原来用 `pageInputWide`（`width: 100%`），在 `pageKeyRow`（`flex-wrap: wrap`）里会把「添加」挤到下一行。改成新的 `pageInlineRow`（`nowrap`）+ `pageInputGrow`（`flex: 1 1 auto; width: auto`）：输入框自适应，按钮稳定在右侧。冒烟断言 `flexWrap === "nowrap"` 且输入框 `width === "auto"`。
+
+**顺带**：删掉 0.5.8 之后就不再使用的 `page.testOkShort / testMissingShort / testFailShort`（zh/en 同步，157/157）。
+
+**回归**：冒烟断言 —— 「获取可用模型」必须弹出 picker（`fetch-dialog`）；「添加所选」后清单出现该 id 且**仍未写盘**；逐个移除后创建被拒且零写盘；手工输入 `glm-4.6, qwen-max` 后清单两项、创建时同一次 mutate 带 `models`。
+
+
+### 0.5.15：内置目录回退 + 第三方预设
+
+**A. 目录回退（为什么必须先做）**：本页的模型一直只来自配置里的 `providers.<route>.models`。而用预设（或官方编辑器）建出来的内置供应商，profile 是**空对象**，模型在适配器的内置目录里 → 本页会显示「没有模型」。
+
+修法：选中一条 `models` 为空的 route 时，用 `discoverModels(namespace, { provider })` 读目录（目录供应商**零网络**），把结果作为**只读行**渲染（`page-model-inherited` + 一行提示），保留绿点与「测试连接」，不参与拖拽、不能打开详情弹窗；`catalogRows` 按 route 缓存，切回来不重复请求。
+
+**B. 第三方预设**：新建弹窗加了「添加方式」两个选项（仅在存在可添加的预设时出现）：
+
+- 可添加预设 = `listConfigurableProviders()` 里 `declared === true` 且 `settingsPath` 非空、`settingsNs` 就是本命名空间、且 `providers[id]` 还没配置的条目（和官方那个下拉同源）；
+- 选预设 → 只需「显示名（可选）+ 密钥（可选）」；写盘是 **`providers.<id> = {}`**（有密钥时再加 `apiKeyEnv`），**不写 models** —— 地址/协议/模型由目录提供，这也是它不会撞上 `resolves no models` 的原因；
+- 预设弹窗是**独立的第二个分支**（`data-mo-mode="catalog"`），共用一个 `addModeTabs()`；自定义那条分支原样不动，避免在同一段 JSX 里塞两套条件。
+
+**顺带**：`page.baseUrlRequired` 与 `page.modelsFieldHint` 里残留的「从网关获取」都改成「获取可用模型」（按钮改名时漏了这两处，实机截图发现的）。
+
+**0.5.16**：「添加方式」那行改成**始终渲染**。之前在没有可添加预设（内置目录里的供应商都配置过了）时整行 `return null`，实机上看起来就是「这个功能不存在」。现在第三方那格变灰、`title` 说明原因，自定义始终可选。冒烟补了这条：预设耗尽时仍有两个模式选项、catalog 侧 `disabled` 且带说明、custom 侧可用。
+
+**0.5.17：`declared` 的语义我弄反了**（实机反馈「第三方那格一直是灰的」）。目录条目里的 `declared` 是**「用户手工声明」**，不是「由目录声明」：
+
+```js
+// dsh-llm-pi-ai/lib/index.js  directoryEntries()
+declared: installed === void 0     // 目录里没有这个 provider 才是 true
+```
+
+所以「可添加预设」必须取 `declared === false` 的那批（目录自带、尚未配置），我写成 `!== true` → 恒为空。改成 `if (entry.declared === true) continue;` 后正常。**教训：字段名读起来像什么不重要，去读生成它的那行代码。**（本页原有的「官方目录 / 自定义供应商」分组其实一直是对的：`entry.declared === true ? "custom" : "catalog"`。）
+
+**0.5.18：一个弹窗，两套内容**（实机反馈「又出来个弹窗」）。0.5.15 为了少改 JSX，把预设做成了**第二个 portal**（切换模式 = 换一个弹窗），视觉上就是「弹窗关掉又冒出一个」。现在合并成一个 `DialogShell`：`addDialog.mode` 只决定内容 —— 预设块用三元插在 `addModeTabs()` 之后，自定义那四个字段用 `addDialog.mode === "catalog" ? null : h(...)` 前缀挡住（前缀不影响数组元素结构），显示名/密钥两栏共用；提交按钮在 catalog 模式且未选预设时禁用。
+
+**下拉「全白」**：原生 `<select>` 的弹出层跟系统主题走，深色界面里就是白底。补了 `.dsh-mo-select` 规则（深色底 + 前景色 + 边框），并在控件上写 `colorScheme: "dark"`，让 Chromium 用深色渲染那个 popup 与 `option` 列表。
+**回归**：冒烟断言 —— 新建弹窗有两个模式选项；预设下拉列出未配置的 `kimi`；选它创建 = 一次 mutate、只设 `providers/kimi`、**不带 models**、弹窗关闭；`providers.bare = {}` 的路由渲染出目录里的只读模型行 + 提示，且没有可编辑行。
+
+
+### 0.5.19：弹窗可拖动、点外面不关
+
+**可拖动**：`DialogShell` 自己持有一个 `offset {x,y}` 状态，卡片渲染成 `transform: translate(...)`；`onMouseDown` 挂在卡片上，但只认**带 `data-mo-drag` 的头部条**（`S.pickHead`），并且 `closest("button, a, input, select, textarea, [data-mo-no-drag]")` 命中时直接放弃 —— 所以点 ✕、点输入框都不会挪窗。拖动过程用 document 上的 `mousemove`/`mouseup` 捕获，鼠标移出卡片也不会断。
+
+**点外面不关**：四个弹窗的遮罩层原来的 `onMouseDown: if (target === currentTarget) close()` 全部删掉。关窗只剩三条路：✕、取消、`Esc`（`Esc` 已经在 DialogShell 的 document 捕获里处理）。理由：这些弹窗里有填了一半的表单，误点空白直接丢弃代价太大；需要看被挡住的内容时，现在可以直接把窗拖开。
+
+**回归**：冒烟断言 —— 遮罩层不再有 `onMouseDown`；每个弹窗的头部条唯一且 `cursor: "move"`；卡片带 `onMouseDown` 且初始 `transform: translate(0px, 0px)`。
+
+
 ## 测试
 
 `test/smoke.mjs` 是零依赖的无头冒烟测试：桩 React（带真正的 hook 槽位和一层子组件解析，所以 DragList 的行也在树里）、桩 DOM、假宿主。它检查——三个座位仍然注册；设置页在「有数据 / 空 / 加载中」三态可渲染；**拖拽与编辑真的会写**：供应商行与模型行都带 HTML5 拖拽处理器且保留 `dsh-mo-list`（grab 光标）类；模型的增删改都会把 `models[]` 写进 `llm-pi-ai`（0.5.0 起走「模型详情」弹窗、即时写盘）；空 ID 在**写之前**被拒并给出文案；API 地址与协议各写自己的字段；密钥只走 `credentials.set`（引用名由路由派生）。
@@ -279,7 +341,7 @@ node test/smoke.mjs        # 或 npm test
 - **新建供应商**：缺模型时**零写盘**并给文案、`从网关获取` 会填 id、一次 mutate 同时带 `models` 与 `apiKeyEnv`；
 - **删除**：供应商删除必须**先确认**（取消不写盘）、确认后 `unset providers.<route>` + 清派生凭据、模型删除写回剩余列表；
 - **测试连接**：请求必须带 `baseURL`、点击**同帧**起转（`dsh-mo-act-busy` + `dsh-mo-spin`）、busy 图标是 `loading`、≥450ms 后落到结论、结论把图标换成 `check`/`warn`；
-- **图标与布局**：图标来自 primitives 桩（断言 `data-icon`）；三颗图标键同一个盒子（19×17）；删除键红框、测速键浅底；悬停规则、开关光环与基线对齐（`alignSelf: center`）；悬停文案 ≤16 字、结论 ≤18 字。
+- **图标与布局**：图标来自 primitives 桩（断言 `data-icon`）；三颗图标键同一个盒子（19×17）；删除键红框、测试连接键浅底；悬停规则、开关光环与基线对齐（`alignSelf: center`）；悬停文案 ≤16 字、结论 ≤18 字。
 
 ### 0.4.0 验证范围
 
