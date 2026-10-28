@@ -180,7 +180,7 @@ const mutations = [];
 const credentialWrites = [];
 const credentialClears = [];
 const discovered = [];
-const directory = { describe: async (refs) => ({ ok: true, value: Object.fromEntries(refs.map((ref) => [ref, { configured: ref === "HCNSEC_API_KEY", writable: true }])) }) };
+const directory = { describe: async (refs) => ({ ok: true, value: Object.fromEntries(refs.map((ref) => [ref, { configured: ref === "GATEWAYA_API_KEY", writable: true }])) }) };
 const storeFace = { subscribe: () => () => {}, getSnapshot: () => snapshot, ensure() {} };
 const scope = {
   slots: {
@@ -230,10 +230,10 @@ const scope = {
           /* No settingsPath: a route the shipped catalog owns. The rail must list it
              read-only, because this page could never edit its settings. */
           { provider: "deepseek-official", displayName: "DeepSeek 官方", settingsNs: "", declared: true },
-          { provider: "hcnsec", displayName: "hcnsec", settingsNs: "llm-pi-ai", settingsPath: ["providers", "hcnsec"], declared: true },
-          { provider: "zhipu", displayName: "智谱", settingsNs: "llm-pi-ai", settingsPath: ["providers", "zhipu"], declared: false },
+          { provider: "gatewayA", displayName: "gatewayA", settingsNs: "llm-pi-ai", settingsPath: ["providers", "gatewayA"], declared: true },
+          { provider: "presetA", displayName: "预设 A", settingsNs: "llm-pi-ai", settingsPath: ["providers", "presetA"], declared: false },
           /* Declared by the shipped catalog, not configured yet: the third-party preset. */
-          { provider: "kimi", displayName: "Kimi", settingsNs: "llm-pi-ai", settingsPath: ["providers", "kimi"], declared: false, defaultBaseURL: "https://api.moonshot.cn/v1" }
+          { provider: "presetB", displayName: "Preset B", settingsNs: "llm-pi-ai", settingsPath: ["providers", "presetB"], declared: false, defaultBaseURL: "https://catalog.example.com/v1" }
         ]
       })
     }
@@ -314,13 +314,13 @@ const tick = () => new Promise((done) => setTimeout(done, 0));
 
 /* ------------------------------ fixtures --------------------------- */
 const providerA = {
-  displayName: "新疆幻城网安科技公益大模型安全网关", baseURL: "https://api.hcnsec.cn/v1", api: "openai-completions", apiKeyEnv: "HCNSEC_API_KEY",
+  displayName: "示例网关 A", baseURL: "https://gatewayA.example.com/v1", api: "openai-completions", apiKeyEnv: "GATEWAYA_API_KEY",
   models: [
     { id: "DeepSeek-V4-Flash", contextWindow: 1000000, maxTokens: 384000, input: ["text", "image"], reasoningEfforts: { off: null, high: "high" } },
     { id: "glm-4.6", contextWindow: 200000, input: ["text"] }
   ]
 };
-const providerB = { displayName: "基元律动", baseURL: "https://tokenrhythm.studio/v1", api: "openai-completions", models: [] };
+const providerB = { displayName: "示例网关 B", baseURL: "https://gatewayB.example.com/v1", api: "openai-completions", models: [] };
 
 /* ------------------------------ checks ----------------------------- */
 const failures = [];
@@ -348,16 +348,16 @@ snapshot = { view: { writable: true, revision: 4, namespaces: [] } };
 tree = render();
 expect(flattenText(tree).join(" ").indexOf("还没有配置任何供应商") !== -1, "empty state must render");
 
-const providerC = { displayName: "智谱", baseURL: "https://open.bigmodel.cn/api/paas/v4", api: "openai-completions", apiKeyEnv: "ZHIPU_API_KEY", models: [{ id: "glm-4.5", contextWindow: 128000, input: ["text"] }] };
-snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai", revision: 4, user: null, value: { providers: { hcnsec: providerA, jiyuan: providerB, zhipu: providerC } } }] } };
-store.set("dsh-model-organizer.providerOrder", JSON.stringify(["hcnsec", "jiyuan", "zhipu"]));
+const providerC = { displayName: "预设 A", baseURL: "https://catalog-a.example.com/api/paas/v4", api: "openai-completions", apiKeyEnv: "ZHIPU_API_KEY", models: [{ id: "glm-4.5", contextWindow: 128000, input: ["text"] }] };
+snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai", revision: 4, user: null, value: { providers: { gatewayA: providerA, gatewayB: providerB, presetA: providerC } } }] } };
+store.set("dsh-model-organizer.providerOrder", JSON.stringify(["gatewayA", "gatewayB", "presetA"]));
 /* No unmount simulation here: running the collected effect cleanups would flip the
    page's own liveness flags and the directory answer would be dropped. */
 tree = render();
 await tick();          // the provider directory answers on a microtask
 tree = render();
 let text = flattenText(tree).join(" ");
-expect(text.indexOf("新疆幻城") !== -1, "provider rail must list the provider");
+expect(text.indexOf("示例网关") !== -1, "provider rail must list the provider");
 /* The capacities ride the row's own chip line now; the dialog below is where they are
    edited. Nothing inline spells them any more. */
 const modelRowText = collect(tree, byAttr("page-model")).map((row) => flattenText(row).join(" "));
@@ -488,7 +488,7 @@ providerSwitch.props.onClick({ stopPropagation: function () {} });
 tree = render();
 providerSwitch = collect(tree, byAttr("page-provider-switch"))[0];
 expect(providerSwitch.props["aria-checked"] === "false", "clicking must turn the route off");
-expect(JSON.parse(store.get("dsh-model-organizer.hiddenProviders") || "{}").hcnsec === true, "the off route must persist in the plugin's own store");
+expect(JSON.parse(store.get("dsh-model-organizer.hiddenProviders") || "{}").gatewayA === true, "the off route must persist in the plugin's own store");
 expect(editableRailRows().some((row) => row.props.style && row.props.style.opacity === 0.5), "a disabled route must be dimmed in the rail");
 expect(editableRailRows().some((row) => {
   const dot = collect(row, byAttr("page-provider-dot"))[0];
@@ -496,7 +496,7 @@ expect(editableRailRows().some((row) => {
 }), "the disabled route's dot must flip to data-mo-on=false");
 providerSwitch.props.onClick({ stopPropagation: function () {} });
 tree = render();
-expect(JSON.parse(store.get("dsh-model-organizer.hiddenProviders") || "{}").hcnsec === undefined, "clicking again must clear the route flag");
+expect(JSON.parse(store.get("dsh-model-organizer.hiddenProviders") || "{}").gatewayA === undefined, "clicking again must clear the route flag");
 expect(editableRailRows().every((row) => row.props.style === undefined || row.props.style.opacity === undefined), "the rail must undim");
 
 /* A click on a model row opens the details dialog (portaled to body, so it rides the
@@ -535,14 +535,14 @@ expect(collect(tree, byAttr("model-dialog-delete")).length === 1, "editing an ex
 /* The dialog's own enable switch rides the plugin's hidden list; the row dot follows. */
 collect(tree, byAttr("model-dialog-switch"))[0].props.onClick({ stopPropagation: function () {} });
 tree = render();
-expect(JSON.parse(store.get("dsh-model-organizer.hiddenModels") || "{}")["hcnsec/DeepSeek-V4-Flash"] === true, "the off model must persist under provider/id");
+expect(JSON.parse(store.get("dsh-model-organizer.hiddenModels") || "{}")["gatewayA/DeepSeek-V4-Flash"] === true, "the off model must persist under provider/id");
 expect(collect(tree, byAttr("page-model")).filter((row) => row.props["data-mo-id"] === "DeepSeek-V4-Flash").every((row) => row.props.style && row.props.style.opacity === 0.5),
   "a disabled model must be dimmed");
 expect(collect(tree, byAttr("page-model-dot")).filter((dot) => dot.props["data-mo-on"] === "false").length === 1,
   "the disabled model's dot must flip to data-mo-on=false");
 collect(tree, byAttr("model-dialog-switch"))[0].props.onClick({ stopPropagation: function () {} });
 tree = render();
-expect(JSON.parse(store.get("dsh-model-organizer.hiddenModels") || "{}")["hcnsec/DeepSeek-V4-Flash"] === undefined, "clicking again must clear the model flag");
+expect(JSON.parse(store.get("dsh-model-organizer.hiddenModels") || "{}")["gatewayA/DeepSeek-V4-Flash"] === undefined, "clicking again must clear the model flag");
 expect(collect(tree, byAttr("page-model")).every((row) => row.props.style === undefined), "clicking again must undim the row");
 expect(collect(tree, byAttr("model-dialog")).length === 1, "the dialog stays open while its switch is toggled");
 
@@ -608,7 +608,7 @@ const modelWrite = modelWrites[0];
 expect(modelWrite !== undefined, "Save model must write providers.<route>.models");
 if (modelWrite) {
   expect(modelWrite.ns === "llm-pi-ai", "writes must target the llm-pi-ai namespace, got " + modelWrite.ns);
-  expect(modelWrite.ops.length === 1 && modelWrite.ops[0].op === "set" && modelWrite.ops[0].path.join("/") === "providers/hcnsec/models",
+  expect(modelWrite.ops.length === 1 && modelWrite.ops[0].op === "set" && modelWrite.ops[0].path.join("/") === "providers/gatewayA/models",
     "the single op must set providers.<route>.models, got " + JSON.stringify(modelWrite.ops));
   const written = modelWrite.ops[0].value;
   expect(written.length === 3 && written[2].id === "brand-new", "the written array must carry the new model");
@@ -646,8 +646,8 @@ const boxOf = (item) => (Array.isArray(item.props.children) ? item.props.childre
 expect(boxOf(items[0]).props.checked === true, "candidates start checked");
 expect(modelIds().join("|") === idsBeforeFetch && mutations.length === writesBeforeFetch, "opening the picker must not touch the list");
 expect(flattenText(tree).join(" ").indexOf("选择要添加的模型") !== -1, "the dialog keeps the shipped wording");
-expect(discovered.length === 1 && discovered[0].ns === "llm-pi-ai" && discovered[0].request.provider === "hcnsec"
-  && discovered[0].request.baseURL === "https://api.hcnsec.cn/v1",
+expect(discovered.length === 1 && discovered[0].ns === "llm-pi-ai" && discovered[0].request.provider === "gatewayA"
+  && discovered[0].request.baseURL === "https://gatewayA.example.com/v1",
   "fetch must ask the host for the selected route: " + JSON.stringify(discovered[0] || null));
 
 /* search filters the candidate list */
@@ -693,7 +693,7 @@ const adoptWrites = mutations.slice(writesBeforeAdopt2);
 expect(adoptWrites.length === 1, "adopting must issue exactly ONE mutate, got " + adoptWrites.length);
 if (adoptWrites.length === 1) {
   const adoptedOp = adoptWrites[0].ops[0];
-  expect(adoptedOp.op === "set" && adoptedOp.path.join("/") === "providers/hcnsec/models",
+  expect(adoptedOp.op === "set" && adoptedOp.path.join("/") === "providers/gatewayA/models",
     "the adopt write must set providers/<route>/models, got " + JSON.stringify(adoptWrites[0].ops));
   const adopted = adoptedOp.value;
   expect(adopted.some((model) => model.id === "brand-new-from-host"), "添加所选 must append the checked model");
@@ -727,7 +727,7 @@ baseInput.props.onChange({ target: { value: "https://api.example.com/v1" } });
 tree = render();
 collect(tree, byAttr("page-base-url"))[0].props.onBlur();
 await tick();
-expect(mutations.some((row) => row.ops[0].op === "set" && row.ops[0].path.join("/") === "providers/hcnsec/baseURL" && row.ops[0].value === "https://api.example.com/v1"),
+expect(mutations.some((row) => row.ops[0].op === "set" && row.ops[0].path.join("/") === "providers/gatewayA/baseURL" && row.ops[0].value === "https://api.example.com/v1"),
   "Base URL must write providers.<route>.baseURL");
 
 tree = render();
@@ -738,7 +738,7 @@ expect(collect(tree, (node) => node.props && node.props["data-mo"] === "page-api
 expect(apiOptions.filter((node) => node.props["aria-checked"] === "true").length === 1, "exactly one protocol may be marked as current");
 apiOptions.filter((node) => node.props["data-mo-id"] === "anthropic-messages")[0].props.onClick();
 await tick();
-expect(mutations.some((row) => row.ops[0].path.join("/") === "providers/hcnsec/api" && row.ops[0].value === "anthropic-messages"),
+expect(mutations.some((row) => row.ops[0].path.join("/") === "providers/gatewayA/api" && row.ops[0].value === "anthropic-messages"),
   "protocol must write providers.<route>.api");
 /* width:100% plus padding and border overflowed the settings column (the screenshot's
    first red box) — every sized control must opt into border-box. */
@@ -748,11 +748,11 @@ expect(sizedControls.every((node) => node !== undefined && node.props.style.boxS
 
 /* the key goes to the credentials service only */
 tree = render();
-collect(tree, byAttr("page-api-key"))[0].props.onChange({ target: { value: "sk-test-value" } });
+collect(tree, byAttr("page-api-key"))[0].props.onChange({ target: { value: "sk-placeholder-1" } });
 tree = render();
 collect(tree, byAttr("page-key-save"))[0].props.onClick();
 await tick();
-expect(credentialWrites.length === 1 && credentialWrites[0].ref === "HCNSEC_API_KEY" && credentialWrites[0].value === "sk-test-value",
+expect(credentialWrites.length === 1 && credentialWrites[0].ref === "GATEWAYA_API_KEY" && credentialWrites[0].value === "sk-placeholder-1",
   "Save key must call credentials.set with the derived reference");
 
 /* The switch semantics, pinned directly: this harness does not render the composer
@@ -760,16 +760,16 @@ expect(credentialWrites.length === 1 && credentialWrites[0].ref === "HCNSEC_API_
 const pickerFilter = plugin.__test && plugin.__test.visibleGroupsFor;
 expect(typeof pickerFilter === "function", "the plugin must expose the picker filter for this check");
 const groupsFixture = [
-  { id: "hcnsec", models: [{ id: "a" }, { id: "b" }] },
-  { id: "jiyuan", models: [{ id: "c" }] }
+  { id: "gatewayA", models: [{ id: "a" }, { id: "b" }] },
+  { id: "gatewayB", models: [{ id: "c" }] }
 ];
-const afterSwitch = pickerFilter(groupsFixture, { provider: "hcnsec", id: "a" }, { providers: { jiyuan: true }, models: { "hcnsec/b": true } });
-expect(afterSwitch.length === 1 && afterSwitch[0].id === "hcnsec", "a disabled route must leave the picker");
+const afterSwitch = pickerFilter(groupsFixture, { provider: "gatewayA", id: "a" }, { providers: { gatewayB: true }, models: { "gatewayA/b": true } });
+expect(afterSwitch.length === 1 && afterSwitch[0].id === "gatewayA", "a disabled route must leave the picker");
 expect(afterSwitch[0].models.length === 1 && afterSwitch[0].models[0].id === "a", "a disabled model must leave the picker");
-const keepsCurrent = pickerFilter(groupsFixture, { provider: "jiyuan", id: "c" }, { providers: { jiyuan: true }, models: {} });
-expect(keepsCurrent.some((group) => group.id === "jiyuan" && group.models.some((model) => model.id === "c")),
+const keepsCurrent = pickerFilter(groupsFixture, { provider: "gatewayB", id: "c" }, { providers: { gatewayB: true }, models: {} });
+expect(keepsCurrent.some((group) => group.id === "gatewayB" && group.models.some((model) => model.id === "c")),
   "the active model must never disappear underneath the selection, got [" + keepsCurrent.map((group) => group.id).join(",") + "]");
-const allHidden = pickerFilter(groupsFixture, null, { providers: { hcnsec: true, jiyuan: true }, models: {} });
+const allHidden = pickerFilter(groupsFixture, null, { providers: { gatewayA: true, gatewayB: true }, models: {} });
 expect(allHidden.length === 2, "an all-disabled picker must fall back to the full list, never render empty");
 
 /* the dashed add-provider affordance and its dialog */
@@ -802,7 +802,7 @@ expect(collect(modelIdRow, byAttr("add-models"))[0].props.style.width === "auto"
   "the id input must grow instead of taking the whole row");
 expect(mutations.length === opsBefore, "an empty route must not reach the host");
 expect(flattenText(tree).join(" ").indexOf("路由 ID 不能为空") !== -1, "the refusal must be explained");
-collect(tree, byAttr("add-route"))[0].props.onChange({ target: { value: "hcnsec" } });
+collect(tree, byAttr("add-route"))[0].props.onChange({ target: { value: "gatewayA" } });
 tree = render();
 collect(tree, byAttr("add-submit"))[0].props.onClick();
 await tick();
@@ -817,7 +817,7 @@ collect(tree, byAttr("add-base-url"))[0].props.onChange({ target: { value: "http
 tree = render();
 collect(tree, byAttr("add-api-option")).filter((node) => node.props["data-mo-id"] === "anthropic-messages")[0].props.onClick();
 tree = render();
-collect(tree, byAttr("add-key"))[0].props.onChange({ target: { value: "sk-gw" } });
+collect(tree, byAttr("add-key"))[0].props.onChange({ target: { value: "sk-placeholder-2" } });
 tree = render();
 
 /* The dialog can pull the ids from the gateway before the route exists (the discovery
@@ -866,7 +866,7 @@ if (created !== undefined && created.ops.length === 2) {
   expect(Array.isArray(createdModels) && createdModels.length === 2 && createdModels[0].id === "glm-4.6" && createdModels[1].id === "qwen-max",
     "the profile must list the typed models: " + JSON.stringify(createdModels));
 }
-expect(credentialWrites.some((row) => row.ref === "MY_GATEWAY_API_KEY" && row.value === "sk-gw"), "the secret must go to the credentials service");
+expect(credentialWrites.some((row) => row.ref === "MY_GATEWAY_API_KEY" && row.value === "sk-placeholder-2"), "the secret must go to the credentials service");
 expect(collect(tree, byAttr("add-dialog")).length === 0, "a successful create must close the dialog");
 
 /* third-party presets: the same dialog offers the shipped catalog, and creating one
@@ -884,15 +884,15 @@ expect(collect(tree, byAttr("add-route")).length === 0 && collect(tree, byAttr("
 const presetSelect = collect(tree, byAttr("add-preset"))[0];
 expect(presetSelect !== undefined, "the preset mode needs a provider select");
 const presetIds = (presetSelect.props.children || []).map((option) => option.props.value).filter((value) => value !== "");
-expect(presetIds.indexOf("kimi") !== -1, "the select must list the unconfigured catalog provider, got " + JSON.stringify(presetIds));
+expect(presetIds.indexOf("presetB") !== -1, "the select must list the unconfigured catalog provider, got " + JSON.stringify(presetIds));
 const opsBeforePreset = mutations.length;
-collect(tree, byAttr("add-preset"))[0].props.onChange({ target: { value: "kimi" } });
+collect(tree, byAttr("add-preset"))[0].props.onChange({ target: { value: "presetB" } });
 tree = render();
 collect(tree, byAttr("add-submit"))[0].props.onClick();
 await tick();
 tree = render();
 const presetWrite = mutations[mutations.length - 1];
-expect(mutations.length === opsBeforePreset + 1 && presetWrite.ops.length === 1 && presetWrite.ops[0].path.join("/") === "providers/kimi",
+expect(mutations.length === opsBeforePreset + 1 && presetWrite.ops.length === 1 && presetWrite.ops[0].path.join("/") === "providers/presetB",
   "creating a preset must set exactly that profile: " + JSON.stringify(presetWrite));
 expect(presetWrite.ops[0].value.models === undefined,
   "a preset profile must not list models (the catalog supplies them): " + JSON.stringify(presetWrite.ops[0].value));
@@ -902,7 +902,7 @@ expect(collect(tree, byAttr("add-dialog")).length === 0, "a successful preset cr
    are shown read-only, never as editable rows. */
 {
   const before = discovered.length;
-  snapshot = { view: { writable: true, revision: 7, namespaces: [{ ns: "llm-pi-ai", revision: 7, value: { providers: { bare: {} } } }] } };
+  snapshot = { view: { writable: true, revision: 7, namespaces: [{ ns: "llm-pi-ai", revision: 7, value: { providers: { bare: { baseURL: "https://gatewayBare.example.com/v1" } } } }] } };
   tree = render();
   await tick();
   await tick();
@@ -910,6 +910,11 @@ expect(collect(tree, byAttr("add-dialog")).length === 0, "a successful preset cr
   const inherited = collect(tree, byAttr("page-model-inherited"));
   expect(discovered.length === before + 1 && inherited.length >= 2,
     "a catalog-served route must list the catalog models, got " + inherited.length + " rows");
+  /* The fallback asks about the route too, and must carry its endpoint: the host refuses a
+     catalog-less route without one, which is what emptied this list before 0.5.20. */
+  const inheritedRequest = discovered[discovered.length - 1];
+  expect(inheritedRequest.request.provider === "bare" && inheritedRequest.request.baseURL === "https://gatewayBare.example.com/v1",
+    "the catalog fallback must carry the route's baseURL: " + JSON.stringify(inheritedRequest.request));
   expect(collect(tree, byAttr("page-inherited-hint")).length === 1, "the inherited rows must say where they come from");
   expect(collect(tree, byAttr("page-model")).length === 0, "inherited rows must not be editable rows");
 }
@@ -1105,14 +1110,14 @@ expect(lonelyLink !== undefined && typeof lonelyLink.props.onClick === "function
   expect(focusableIn(mixedRoot).length === 1, "focusableIn must skip a control the browser cannot focus");
 }
 
-snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai", revision: 4, user: null, value: { providers: { hcnsec: providerA, jiyuan: providerB, zhipu: providerC } } }] } };
+snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai", revision: 4, user: null, value: { providers: { gatewayA: providerA, gatewayB: providerB, presetA: providerC } } }] } };
 
 /* ---- destructive + diagnostic row actions ---------------------------------
    A route delete asks first (it takes the profile and this page's derived credential with
    it); a model test asks the host which models the route serves and reports a verdict on
    the row; a model delete rewrites the list without that row. */
 {
-  snapshot = { view: { writable: true, revision: 6, namespaces: [{ ns: "llm-pi-ai", revision: 6, value: { providers: { hcnsec: providerA, jiyuan: providerB, zhipu: providerC } } }] } };
+  snapshot = { view: { writable: true, revision: 6, namespaces: [{ ns: "llm-pi-ai", revision: 6, value: { providers: { gatewayA: providerA, gatewayB: providerB, presetA: providerC } } }] } };
   let tree = render();
   const deleteProvider = collect(tree, byAttr("page-provider-delete"))[0];
   expect(deleteProvider !== undefined, "the provider card needs a delete button");
@@ -1155,16 +1160,16 @@ snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai"
   collect(tree, byAttr("provider-delete-confirm"))[0].props.onClick();
   await tick();
   const removal = mutations[mutations.length - 1];
-  expect(removal !== undefined && removal.ops.length === 1 && removal.ops[0].op === "unset" && removal.ops[0].path.join("/") === "providers/hcnsec",
+  expect(removal !== undefined && removal.ops.length === 1 && removal.ops[0].op === "unset" && removal.ops[0].path.join("/") === "providers/gatewayA",
     "confirming must unset exactly that profile: " + JSON.stringify(removal));
-  expect(credentialClears.length === clearsBefore + 1 && credentialClears[credentialClears.length - 1] === "HCNSEC_API_KEY",
+  expect(credentialClears.length === clearsBefore + 1 && credentialClears[credentialClears.length - 1] === "GATEWAYA_API_KEY",
     "deleting a route must clear the credential this page derived: " + JSON.stringify(credentialClears.slice(-1)));
 
   /* per-model test: the harness host lists two ids, so one row verifies and one does not.
      The host snapshot is static here, so re-select the route the delete just dropped from
      the local order (in a real host the next describe would simply not list it). */
   tree = render();
-  const stillListed = collect(tree, byAttr("page-provider")).filter((node) => node.props["data-mo-id"] === "hcnsec")[0];
+  const stillListed = collect(tree, byAttr("page-provider")).filter((node) => node.props["data-mo-id"] === "gatewayA")[0];
   expect(stillListed !== undefined, "the harness snapshot still lists the route it just unset");
   stillListed.props.onClick();
   tree = render();
@@ -1219,12 +1224,12 @@ expect(testHints.every((hint) => typeof hint === "string" && hint.length > 0 && 
   expect(verdictTitles.every((title) => typeof title === "string" && title.length <= 18),
     "a verdict tooltip must stay a sentence fragment (<=18 chars), got " + JSON.stringify(verdictTitles));
   const lastTest = discovered[discovered.length - 1];
-  expect(discovered.length === discoBefore + 2 && lastTest.request.provider === "hcnsec",
+  expect(discovered.length === discoBefore + 2 && lastTest.request.provider === "gatewayA",
     "testing a model must ask the host about that route");
   /* a catalog-less route is only testable when the draft carries its endpoint, otherwise
      the host refuses with "ships no catalog for provider X" — the bug that made every
      test fail */
-  expect(lastTest.request.baseURL === "https://api.hcnsec.cn/v1",
+  expect(lastTest.request.baseURL === "https://gatewayA.example.com/v1",
     "the test must carry the route's baseURL: " + JSON.stringify(lastTest.request));
   expect(typeof collect(tree, byAttr("page-model-test"))[0].props.style.width === "number"
     && collect(tree, byAttr("page-model-test"))[0].props.style.width === collect(tree, byAttr("page-model-test"))[1].props.style.width,
@@ -1262,7 +1267,7 @@ expect(testHints.every((hint) => typeof hint === "string" && hint.length > 0 && 
   collect(tree, byAttr("page-model-delete"))[0].props.onClick({ stopPropagation() {} });
   await tick();
   const write = mutations[mutations.length - 1];
-  expect(mutations.length === opsBeforeModelDelete + 1 && write.ops.length === 1 && write.ops[0].path.join("/") === "providers/hcnsec/models",
+  expect(mutations.length === opsBeforeModelDelete + 1 && write.ops.length === 1 && write.ops[0].path.join("/") === "providers/gatewayA/models",
     "deleting a model must write the models array: " + JSON.stringify(write));
   const remaining = write.ops[0].value.map((row) => row.id);
   expect(remaining.indexOf(modelIds[0]) === -1 && remaining.length === modelIds.length - 1,
@@ -1273,7 +1278,7 @@ expect(testHints.every((hint) => typeof hint === "string" && hint.length > 0 && 
    the preset side is disabled instead of silently disappearing (that read as a missing
    feature in the real UI). */
 {
-  snapshot = { view: { writable: true, revision: 9, namespaces: [{ ns: "llm-pi-ai", revision: 9, value: { providers: { hcnsec: providerA, kimi: {}, zhipu: {} } } }] } };
+  snapshot = { view: { writable: true, revision: 9, namespaces: [{ ns: "llm-pi-ai", revision: 9, value: { providers: { gatewayA: providerA, presetB: {}, presetA: {} } } }] } };
   tree = render();
   await tick();
   tree = render();

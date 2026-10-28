@@ -111,41 +111,12 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 
 页面上的表现：每行左侧一颗绿点，启用＝亮、停用＝暗（行本身也变淡），tooltip 说明「只影响本插件、DSH 配置原样保留」。0.5.0 起模型行与供应商行共用这一个语义——此前供应商行的绿点是**读取现状**（配置过 baseURL / 密钥），不是开关。冒烟测试覆盖开关持久化、变淡、以及上述三条语义，并有对照证明改坏即失败。
 
-### 0.5.0：左栏取数、模型详情弹窗与浮窗头部
-
-**只读一个 settings 命名空间会漏掉别的适配器注册的路由。** 0.4.0 的左栏数据源是 `llm-pi-ai` 那一个命名空间的设置文档，于是 DeepSeek 官方那两条路由根本不出现——它们的设置在**自己的**命名空间里。教训：一个 provider 的配置归属由适配器决定，插件不能假定「我认识的那个 namespace 里没写，就等于这个 provider 不存在」。
-
-**官方模型页自己的口径是 join，本插件没照抄**：官方页用 `remote.llm.listProviders()`（宿主已知的全部路由）∪ `remote.llm.listConfigurableProviders()`（可在设置页编辑的目录）——对 `deepseek-account` / `deepseek-official` 这两条来说两个来源结果相同。本插件只调 `listConfigurableProviders()`，再与 `llm-pi-ai` 设置文档求并：目录里 `settingsPath` 为空的条目（官方 / 内置）渲染成只读行置顶；`settingsPath` 非空、且**已经写进设置文档**的才进拖拽列表，再按 `entry.declared` 分成「官方目录 / 自定义供应商」。教训：只从一个来源取数就会漏（0.4.0 只读设置文档，官方路由整批消失），但也别把官方页的 join 说成自己的口径——文档要写实现真正调的那个 API。
-
-**`settingsPath` 为空 = 命名空间级（官方 / 内置）路由。** 这类路由没有 `providers.<id>` 这一层，编辑要打在它自己命名空间的根上；本插件因此把它们渲染成**只读行**（顶部分组「官方（内置）」，悬停提示「官方路由 · 请到官方模型页编辑（点击前往）」），点击 = `setTakeover(false)`（把「模型」这一行交还官方页，与本页头部「官方模型页」按钮同一个动作）。插件不替它们写配置，只负责把它们列出来并给出出口。
-
-**模型行是即时写盘，没有草稿状态。** 0.5.0 把模型区的行内输入框和页面底部的「保存模型」一起删掉，编辑全部收进「模型详情」弹窗，点保存立刻 `mutate` 一条 op 写回该路由的 `models[]`。原因：模型拖拽排序本来就是把 `models[]` 整体 `set`（必须即时提交），留着草稿行会在拖完之后与配置对不上——既然有一个动作必须即时，索性全部即时，页面状态就只剩「配置的镜像 + 本机 localStorage 里的顺序 / 可见性」。弹窗里能改的字段就是会写进配置的那些：`id`、显示名（`name`，留空则删掉该字段）、`contextWindow`、`maxTokens`、输入模态（文本 / 图片，至少留一个）、`reasoningEfforts`（继承 = 不写、不支持 = `false`、自定义 = 等级字典）；改模型 ID 会把本机的「隐藏」键一起迁移。推理等级的 YAML 声明不再是唯一途径，但仍可继续使用。
-
-**0.5.0 的 DOM 契约**（冒烟测试与手工核对都用；已按 `lib/client.js` 逐项核对）：
-
-- 官方只读行：`[data-mo="page-provider"][data-mo-official="true"]`，`data-mo-id=<路由>`，`role="button"`，`title` =「官方路由 · 请到官方模型页编辑（点击前往）」，点击 / Enter = `setTakeover(false)`；它们不进拖拽列表（拖了也无法生效）；
-- 可编辑供应商行：`[data-mo="page-provider"]`（不带 `data-mo-official`）+ `data-mo-id`；启用点 `[data-mo="page-provider-dot"]` 带 `data-mo-on="true|false"`；
-- 模型行（单行元素）：`[data-mo="page-model"]` + `data-mo-id` + `role="button"` + `draggable`，内含 `[data-mo="page-model-dot"]`（带 `data-mo-on`），行内只剩「名称 + 摘要」两段文本；旧的 `page-model-id` / `-context` / `-max` / `-vision` / `-handle` 与底部的 `page-models-save` 已全部删除；
-- 模型详情弹窗（`ReactDOM.createPortal` 到 `document.body`）：`model-dialog`（背板）/ `-card` / `-close` / `-id` / `-name` / `-context` / `-max` / `-text`（disabled、恒勾选）/ `-image` / `-reasoning-option`（三个，`data-mo-id` = `inherit` / `none` / `custom`）/ `-level` / `-level-value` / `-level-add` / `-level-remove` / `-switch` / `-error` / `-delete`（仅编辑态）/ `-cancel` / `-save`；`page-model-add` 打开它的新建态；
-- 浮窗：可排序供应商 < 2 时 `[data-mo="panel"]` 仍然渲染（头部含 `panel-open-organizer` 与 `providers.onlyOne` 文案），只是不渲染列表。
-
-**浮窗头部在「可排序供应商 < 2」时仍然渲染。** 0.5.0 之前浮窗的挂载条件里带着「可排序供应商 ≥ 2」，于是只挂了官方路由（或只有一个自定义供应商）的用户**连那颗「模型管理页」按钮都看不到**——而它是回到本插件页的唯一入口，等于整页失联。修法是把「头部」与「列表」的渲染条件拆开：头部无条件挂载，列表在无可排序项时收起（折叠状态仍由 `panelOpen` 控制）。不变量：**入口的可见性不能依赖它要排序的内容是否存在**。
-
----
-
 ## 设置页的 UI 约定（都是实机截图打回来的）
 
 ### 基础两条（0.4.0）
 
 1. **控件必须 `boxSizing: "border-box"`**：`width: "100%"` 配默认 content-box 时，宽度是 100% 再加 padding 与边框，输入框会顶出设置列（实机截图里 API 地址那栏）。凡会被拉伸的输入框/选择器/按钮都显式声明 border-box。
 2. **不要用原生 `<select>`**：下拉列表由平台绘制，本主题下是白底浅字（截图里「完全看不清」）。协议选择改用三个自绘的 radio 分段按钮（`pageSegments`/`pageSegment`），完整标签放 `title` 与下方提示行。
-
-### 0.5.12：按钮的尺寸、对齐、颜色与文案
-
-- **尺寸**：三颗行内图标键（供应商删除、模型测试、模型删除）共用 `ACTION_BOX`（19×17、圆角 6、`border-l1`）。高度**刻意等于启用开关的 17**——早期 26×22 被截图指出「比开关高一头」；宽度按截图在 20 → 22 → 21 → 17 → 19 之间收敛定稿，图标 13px。
-- **对齐**：详情头部是 `align-items: baseline`。图标键与开关都没有文字基线（前者首个 flex 项是 SVG，后者是带 2px padding + 1px 边框的圆点盒），各自按自己的基线对，盒子同高却差 1–2px。两者都加 `alignSelf: "center"`：文字仍按基线排，控件按中线互相对齐。
-- **颜色**：删除键 = `DELETE_ACTION`（共享盒子 + 红框、透明底、红图标）；测试连接键 = `TEST_ACTION`（只覆盖 `background` 为普通按钮的浅底）。结论色只留在图标上（`.dsh-mo-act-ok/-miss/-danger`），不染边框。
-- **文案**：悬停只回答「这个按钮做什么 / 现在什么状态」，一行说完；实现细节留在本文档。冒烟测试钉「提示 ≤16 字、结论 ≤18 字」，防止长段落回流。
 
 ### 按钮悬停：规则为什么只能写在注入样式表里
 
@@ -186,143 +157,34 @@ Error: permission: cannot restore preset "auto" without its active integration
 
 备选：按会话把权限预设从 auto 改掉，或直接删掉那几个会话。真正要修的是 DSH：让 auto-review 不再 `inject permissionPresets`，或者 pin 失败时降级而不是让整个条目激活失败 —— 插件侧改不了。
 
-### 0.5.2：弹窗的焦点陷阱（第一版没修好，第二版才修对）
+## 版本速查（0.4 → 0.5）
 
-**症状**：在「添加模型提供商」弹窗里按 Tab，焦点跳到弹窗背后的设置页。
+每个版本只留一句「做了什么 + 为什么」，细节见后面的四个结论。
 
-**原因**：每个弹窗都用 `ReactDOM.createPortal` 挂到 `document.body`，在文档顺序里排在整页**之后**。两张脸：① Tab 从卡片最后一个控件继续往前走，浏览器绕回文档开头（也就是设置页的导航）；② 打开瞬间焦点没落进弹窗（宿主壳自己的 focus 流程会把刚插入的 portal 的 `focus()` 抢走），于是第一次 Tab 直接从页面上的按钮继续走。
+| 版本 | 做了什么 | 关键点 |
+| --- | --- | --- |
+| 0.4.0 | 自建页接管官方「模型」这一行 | 同 id + **相对** priority（官方 ±1）；交还只对这一次打开有效 |
+| 0.5.0 | 左栏并入 provider 目录；模型行单行 + 详情弹窗；浮窗头部常驻 | 官方路由（`settingsPath` 为空）只读；模型改动即时写盘 |
+| 0.5.2 | 弹窗焦点陷阱 | 见结论 1 |
+| 0.5.3 | 新建供应商必须列出模型 | 宿主 `resolveRouteModels()`：目录外的路由 `models` 为空 → `resolves no models` |
+| 0.5.4 | 行内测试 / 删除；删除供应商 | 删除先清 profile 命名的凭据，再 `unset` 整个 profile |
+| 0.5.5 | 「测试连接」全失败 | 见结论 3 |
+| 0.5.6–0.5.11 | 图标键尺寸 / 图标 / 转圈返工 | 别自己画图标，用 primitives 的 `IconXxxOutlineRegular`；见结论 4 |
+| 0.5.12 | 按钮尺寸、配色、文案统一 | 危险操作红色；悬停只能写在注入样式表里（官方类不覆盖 hover） |
+| 0.5.13–0.5.14 | 新建弹窗的模型改成「清单 + 勾选」 | 复用同一个 picker，`target: "draft"` 区分「回填」与「写盘」 |
+| 0.5.15 | 目录模型回退 + 第三方预设 | `declared` 语义见结论 2；预设写**空 profile** |
+| 0.5.16–0.5.18 | 模式行常显、`declared` 修正、单弹窗、深色下拉 | 原生 `select` 不写 `colorScheme: "dark"` 就是白底 |
+| 0.5.19 | 弹窗可拖动、点外面不关 | 拖拽只认 `[data-mo-drag]` 头部；关窗只剩 ✕ / 取消 / `Esc` |
+| 0.5.20 | 收尾：去重、脱敏、文档精简 | 两类行共用 `modelTestButton()`；四次 discovery 调用统一走 `discoveryRequest()`；拖拽补 `window blur` 兜底；测试夹具换成占位名；本文件的历史章节压成上面这张表 |
 
-**0.5.1 为什么没修好**：第一版只在卡片上挂 `onKeyDown`，且**只在边界**（第一个/最后一个）才 `preventDefault`。中间步骤仍交给浏览器自己走；只要焦点不在卡片里（情形②），或者边界判定没命中，浏览器就照旧走到页面上去。**教训：不能让浏览器"帮我们走一步"，必须整段接管。**
+### 四个值得单独记住的结论
 
-**0.5.2 的做法**（`DialogShell`，在 `ModelsPage` 之前）：
+1. **弹窗焦点**：portal 挂在 `<body>` 末尾，`Tab` 必须由我们**整段接管**（document 捕获阶段 + 手动步进 + 两端循环）并用 `focusin` 回拉；只在边界 `preventDefault` 一定漏。
+2. **`declared` 是「用户手工声明」**：`directoryEntries()` 里 `declared: installed === void 0`。第三方预设 = `declared === false` 且未配置的条目；写反过一次，那格就恒灰。
+3. **discovery 必须带 `baseURL` / `api`**：目录外的路由缺地址时宿主抛 `ships no catalog for provider X`。统一走 `discoveryRequest()`，别再手拼。
+4. **转圈**：`IconLoadingOutlineRegular` 是静态字形。动画写在注入样式表（`@keyframes dsh-mo-spin`），并在点击回调里直接改 DOM 起转；再用 `TEST_SPIN_MS = 450` 保证看得见（快网关几十毫秒就答完）。
 
-1. 卡片契约：`role="dialog"` + `aria-modal="true"` + `tabIndex:-1`（空弹窗的焦点兜底）；
-2. **整段接管 Tab**：挂载时在 `document` 的**捕获阶段**监听 `keydown`，Tab/Shift+Tab 一律 `preventDefault` + `stopPropagation`，然后由 `trapTab()` 自己按卡片内的可聚焦列表前后移动并两端循环 —— 宿主壳（以及任何别的插件）的 keydown 根本看不到这个事件；
-3. **focusin 兜底**：捕获阶段监听 `focusin`，只要有焦点落到卡片之外（别的插件抢焦点、程序化 blur、宿主壳的 focus 管理），立刻拉回卡片第一个控件；
-4. **首帧重试**：挂载时立刻聚焦 `[data-mo-focus]`（添加供应商 → 路由 ID；选模型 → 搜索框；模型详情 → 模型 ID），再用 `requestAnimationFrame` 检查一次"焦点是否真的在卡片里"，不在就再聚焦一次；
-5. `Escape` 在同一层关窗；卸载时把焦点还给打开它的元素（`isConnected` 为假就不还）。
-
-`focusableIn()`（经 `__test` 暴露）要跳过浏览器根本聚焦不到的元素（`getClientRects().length === 0`），并且容忍 `null` 根与没有 `querySelectorAll` 的假 DOM——否则无头测试会直接抛。
-
-**回归**：`test/smoke.mjs` 断言卡片契约、`data-mo-focus` 唯一性、Tab/Shift+Tab 手动前后步进与两端循环、焦点在卡片外时回拉、隐藏控件被跳过、Escape 关窗；并做过「把 Tab 分支改成直接 return → 冒烟必须失败」的反向对照。
-
-**线上验证**：`window.__dshModelOrganizerBuild` 应为 `b56`；打开添加供应商弹窗后焦点直接在「路由 ID」，反复 Tab 只在弹窗内循环。
-
-
-### 0.5.3：新建供应商必须有模型
-
-**症状**：新建供应商后宿主报 `llm-pi-ai: provider "X" resolves no models; the installed catalog does not describe this route, so its models must be listed in configuration`。
-
-**原因**（DSH 侧硬规则，`dsh-llm-pi-ai/lib/index.js` 的 `resolveRouteModels()`）：`entries = configured.length > 0 ? configured : [...catalog]`，然后 `if (entries.length === 0) invalid(provider, "resolves no models…")`。也就是说 **hand-declared 路由（目录里没有的）必须在配置里列出至少一个模型**，否则这条路由解析不出模型。我们原来的「+ 添加模型提供商」只写 `api/baseURL/displayName/apiKeyEnv`，正好踩中。
-
-**做法**：
-
-1. 新建对话框新增必填的「模型 ID」输入（逗号/空格/换行分隔，`parseModelIds()` 去空去重），与 profile、密钥引用在**同一次 mutate** 里写入（`models: [{ id }]`，只写 id，不臆造字段）；
-2. 同一对话框加「从网关获取」：用对话框里的草稿（`baseURL` + `api` + 一次性 `apiKey`）调 `remote.llm.discoverModels` —— 这条缝本来就接受"还不存在的路由"的草稿，所以能在创建前把 id 填进来；失败原样显示宿主给的原因；
-3. `writeModels()` 增加护栏：**不允许把某条路由的模型删空**（否则又回到 "resolves no models"），拒绝时给出同一条文案；
-4. 已有那种"空模型"路由的修法：打开该供应商 → 「获取可用模型」或「+ 添加模型」→ 填至少一个 ID → 保存。
-
-**回归**：冒烟测试覆盖「不带模型提交 → 零写盘 + 明确文案」「从网关获取会填 id」「带 `glm-4.6, qwen-max` 创建 → 同一次 mutate 里 `models` 为两项」。
-
-### 0.5.4：行内「测试 / 删除」与删除供应商
-
-**新增操作**：
-
-1. 供应商详情右上角、启用开关左侧：**删除供应商**（`page-provider-delete`）。走确认弹窗（`provider-delete-dialog`），确认后一次 `unset providers.<route>`，并先清掉该 profile 命名的凭据（`apiKeyEnv`，没有就用 `deriveKeyRef(route)`）；同时把本机顺序表与「停用」表里的这条路由一起清掉。**官方路由不渲染这个按钮**（它们不归本页编辑）。
-2. 每条模型行右侧：**测试**（`page-model-test`）与**删除**（`page-model-delete`）。删除 = 过滤后一次写 `models`，仍然受「不允许删空」护栏约束。
-
-**「测试连接」到底测了什么**（重要，别把它说成"发一条消息给模型"）：宿主 `llm` 的远程接口只有 `listProviders / listConfigurableProviders / discoverModels`，**没有**"发送一次请求"的能力，客户端也读不回密钥（凭据只写），所以做不到真正的补全探测。这里的做法是复用 `discoverModels(namespace, { provider, baseURL, api })`（0.5.4 只发了 `provider`，导致全线失败，见 0.5.5）：
-
-- 自建（目录里没有的）路由：宿主会真的 `GET {baseURL}/models`，带已保存的凭据 → **这一步验证了地址、协议、密钥和网关可达性**；
-- 目录已描述的路由：适配器直接回目录，不发网络请求；
-- 拿到列表后检查该行 id 是否在列表中，结论落在按钮上（`data-mo-state` = `idle | busy | ok | miss | fail`），完整原因放在按钮的 `title` 里。
-
-也就是说：**「✓ 可用」= 网关可达且列表里有这个 ID**，不代表这个 ID 真的能补全；「⚠ 不在列表」= 网关可达但没列出该 ID（多半是拼错或网关没暴露）；「✗ 失败」= 连不上/401/协议不支持（原因见 tooltip）。要做真正的补全探测，得在宿主侧加一个"试跑一次"的接口。
-
-**已知取舍**：行是 `draggable` 的，行内按钮用 `stopPropagation` 阻止冒泡到行的"打开详情"，但无法完全阻止 HTML5 从祖先元素发起拖拽（按钮很小，误拖代价也只是一次排序）。
-
-### 0.5.5：测试连接「全都失败」的真因 + 垃圾桶按钮
-
-**症状**：每个模型的「测试」都失败（红色 ✗），包括明明能正常对话的供应商。
-
-**真因**：`testModel()` 只发了 `{ provider }`，没带 `baseURL` / `api`。而 `dsh-llm-pi-ai` 的 `discoverModels()` 顺序是：
-
-1. 若 provider 在安装目录里 → 直接回目录（不发网络请求）；
-2. 否则 `if (request.baseURL === void 0 || request.baseURL.length === 0) throw "pi-ai ships no catalog for provider X, so its models can only be listed by hand"`。
-
-也就是说：**目录里没有的自建路由（本插件的用户几乎全是这种）必须带 `baseURL`**，否则宿主直接拒绝 —— 不是网络不通，是参数不全。`fetchModels()` 一直带着它，所以「获取可用模型」是好的，只有新加的「测试」漏了。
-
-**修法**：测试请求与 `fetchModels()` 对齐 —— `{ provider, baseURL, api }`（优先取详情面板里正在编辑的值，其次取已保存的 profile）；并把 `ships no catalog` 这条宿主原文映射成一句可操作的中文（先在 API 地址里填上地址再测）。
-
-**教训**：凡是「问宿主网关」的调用，参数要和已经跑通的那条路径逐项对一遍；冒烟测试里固定断言 `request.baseURL`，防止再退化。
-
-### 0.5.6–0.5.11：行内图标键的四次返工（教训）
-
-- **别自己画图标**：emoji `🗑` 的墨迹远小于字号，手绘 SVG 又和界面里的东西不像；改用 DSH 自带 primitives（0.5.8，98 个图标），`kitIcon()` 取不到时退回同尺寸文字 glyph，无头测试仍能跑。
-- **尺寸别靠眼估**：盒子在 `56×20 → 32×20 → 36×22 → 20×17` 之间反复；真正的判据是「与相邻控件同高」（开关 17），最终统一 19×17（见 0.5.12）。
-- **「转圈看不见」不是动画没写**：本地网关 50ms 就答完，React 会把 busy 与结论合并进同一帧，屏幕上从未出现转圈帧。修法：点击回调里直接给 DOM 加 `dsh-mo-act-busy` 并起 CSS 动画（`startSpinNow`），结论至少 450ms 后才落状态；动画作用在 `svg` 上，按钮尺寸不变。
-- **测试连接失败先查参数**：`discoverModels()` 对目录外路由要求 `baseURL`，只发 `{ provider }` 会被宿主拒绝（0.5.5 的真因）；凡是问宿主的调用，参数与已经跑通的那条路径逐项对齐。
-
-### 0.5.13–0.5.14：新建弹窗里的模型改成「清单 + 勾选」
-
-**问题**：0.5.3 为了让「必须列出模型」这条宿主规则可满足，把「从网关获取」做成了**一次性把网关返回的所有 id 灌进输入框**。这和官方交互相反（官方是弹窗勾选、点添加才落盘），用户也没得选。
-
-**做法**：
-
-1. `addDialog.models` 从字符串改成**草稿数组**（每项 `{id, context, maxTokens, vision}`），另加 `modelInput` 只承载手工输入；
-2. 手工添加：`parseModelIds(modelInput)` → `addModelsToDraft()` 去空去重后追加，输入框清空；
-3. 「获取可用模型」：用对话框里的草稿（`baseURL` + `api` + 一次性 `apiKey`）调 `discoverModels`，候选塞进**同一个 picker**，只是多带一个 `target: "draft"`；
-4. `fetch-adopt` 分叉：`target === "draft"` → 只回填弹窗清单（**不写盘**）；否则维持 `writeModels(draftRows.concat(chosen))`；
-5. 清单在弹窗里逐行展示（id + 容量/视觉 chips + 🗑 移除），空清单显示提示；
-6. `createProvider()` 改用 `modelsFromDraft()` 统一校验（空 ID / 重复 / 容量非法都在写盘前拒），profile 写成 `{ api, models: built.models }`。
-
-**为什么复用 picker**：同一个弹窗、同一套搜索/全选/勾选，draft 与 saved 的唯一差别是「采纳之后去哪」，用 `target` 区分，避免第二套弹窗各写一份逻辑。
-
-**0.5.14（同一处的排版）**：手工输入框原来用 `pageInputWide`（`width: 100%`），在 `pageKeyRow`（`flex-wrap: wrap`）里会把「添加」挤到下一行。改成新的 `pageInlineRow`（`nowrap`）+ `pageInputGrow`（`flex: 1 1 auto; width: auto`）：输入框自适应，按钮稳定在右侧。冒烟断言 `flexWrap === "nowrap"` 且输入框 `width === "auto"`。
-
-**顺带**：删掉 0.5.8 之后就不再使用的 `page.testOkShort / testMissingShort / testFailShort`（zh/en 同步，157/157）。
-
-**回归**：冒烟断言 —— 「获取可用模型」必须弹出 picker（`fetch-dialog`）；「添加所选」后清单出现该 id 且**仍未写盘**；逐个移除后创建被拒且零写盘；手工输入 `glm-4.6, qwen-max` 后清单两项、创建时同一次 mutate 带 `models`。
-
-
-### 0.5.15：内置目录回退 + 第三方预设
-
-**A. 目录回退（为什么必须先做）**：本页的模型一直只来自配置里的 `providers.<route>.models`。而用预设（或官方编辑器）建出来的内置供应商，profile 是**空对象**，模型在适配器的内置目录里 → 本页会显示「没有模型」。
-
-修法：选中一条 `models` 为空的 route 时，用 `discoverModels(namespace, { provider })` 读目录（目录供应商**零网络**），把结果作为**只读行**渲染（`page-model-inherited` + 一行提示），保留绿点与「测试连接」，不参与拖拽、不能打开详情弹窗；`catalogRows` 按 route 缓存，切回来不重复请求。
-
-**B. 第三方预设**：新建弹窗加了「添加方式」两个选项（仅在存在可添加的预设时出现）：
-
-- 可添加预设 = `listConfigurableProviders()` 里 `declared === true` 且 `settingsPath` 非空、`settingsNs` 就是本命名空间、且 `providers[id]` 还没配置的条目（和官方那个下拉同源）；
-- 选预设 → 只需「显示名（可选）+ 密钥（可选）」；写盘是 **`providers.<id> = {}`**（有密钥时再加 `apiKeyEnv`），**不写 models** —— 地址/协议/模型由目录提供，这也是它不会撞上 `resolves no models` 的原因；
-- 预设弹窗是**独立的第二个分支**（`data-mo-mode="catalog"`），共用一个 `addModeTabs()`；自定义那条分支原样不动，避免在同一段 JSX 里塞两套条件。
-
-**顺带**：`page.baseUrlRequired` 与 `page.modelsFieldHint` 里残留的「从网关获取」都改成「获取可用模型」（按钮改名时漏了这两处，实机截图发现的）。
-
-**0.5.16**：「添加方式」那行改成**始终渲染**。之前在没有可添加预设（内置目录里的供应商都配置过了）时整行 `return null`，实机上看起来就是「这个功能不存在」。现在第三方那格变灰、`title` 说明原因，自定义始终可选。冒烟补了这条：预设耗尽时仍有两个模式选项、catalog 侧 `disabled` 且带说明、custom 侧可用。
-
-**0.5.17：`declared` 的语义我弄反了**（实机反馈「第三方那格一直是灰的」）。目录条目里的 `declared` 是**「用户手工声明」**，不是「由目录声明」：
-
-```js
-// dsh-llm-pi-ai/lib/index.js  directoryEntries()
-declared: installed === void 0     // 目录里没有这个 provider 才是 true
-```
-
-所以「可添加预设」必须取 `declared === false` 的那批（目录自带、尚未配置），我写成 `!== true` → 恒为空。改成 `if (entry.declared === true) continue;` 后正常。**教训：字段名读起来像什么不重要，去读生成它的那行代码。**（本页原有的「官方目录 / 自定义供应商」分组其实一直是对的：`entry.declared === true ? "custom" : "catalog"`。）
-
-**0.5.18：一个弹窗，两套内容**（实机反馈「又出来个弹窗」）。0.5.15 为了少改 JSX，把预设做成了**第二个 portal**（切换模式 = 换一个弹窗），视觉上就是「弹窗关掉又冒出一个」。现在合并成一个 `DialogShell`：`addDialog.mode` 只决定内容 —— 预设块用三元插在 `addModeTabs()` 之后，自定义那四个字段用 `addDialog.mode === "catalog" ? null : h(...)` 前缀挡住（前缀不影响数组元素结构），显示名/密钥两栏共用；提交按钮在 catalog 模式且未选预设时禁用。
-
-**下拉「全白」**：原生 `<select>` 的弹出层跟系统主题走，深色界面里就是白底。补了 `.dsh-mo-select` 规则（深色底 + 前景色 + 边框），并在控件上写 `colorScheme: "dark"`，让 Chromium 用深色渲染那个 popup 与 `option` 列表。
-**回归**：冒烟断言 —— 新建弹窗有两个模式选项；预设下拉列出未配置的 `kimi`；选它创建 = 一次 mutate、只设 `providers/kimi`、**不带 models**、弹窗关闭；`providers.bare = {}` 的路由渲染出目录里的只读模型行 + 提示，且没有可编辑行。
-
-
-### 0.5.19：弹窗可拖动、点外面不关
-
-**可拖动**：`DialogShell` 自己持有一个 `offset {x,y}` 状态，卡片渲染成 `transform: translate(...)`；`onMouseDown` 挂在卡片上，但只认**带 `data-mo-drag` 的头部条**（`S.pickHead`），并且 `closest("button, a, input, select, textarea, [data-mo-no-drag]")` 命中时直接放弃 —— 所以点 ✕、点输入框都不会挪窗。拖动过程用 document 上的 `mousemove`/`mouseup` 捕获，鼠标移出卡片也不会断。
-
-**点外面不关**：四个弹窗的遮罩层原来的 `onMouseDown: if (target === currentTarget) close()` 全部删掉。关窗只剩三条路：✕、取消、`Esc`（`Esc` 已经在 DialogShell 的 document 捕获里处理）。理由：这些弹窗里有填了一半的表单，误点空白直接丢弃代价太大；需要看被挡住的内容时，现在可以直接把窗拖开。
-
-**回归**：冒烟断言 —— 遮罩层不再有 `onMouseDown`；每个弹窗的头部条唯一且 `cursor: "move"`；卡片带 `onMouseDown` 且初始 `transform: translate(0px, 0px)`。
+补一条机制：用预设建的是 `providers.<id> = {}`，地址 / 协议 / 模型由适配器目录提供，所以页面要用 `discoverModels` 回退展示**只读**模型行。
 
 
 ## 测试
@@ -335,13 +197,14 @@ node test/smoke.mjs        # 或 npm test
 
 为什么值得留着：座位渲染时抛错会被**静默弃权**（官方 UI 悄悄回填），在浏览器里只看到「面板不见了」。这是提交前唯一能撞出这类错误的手段；改座位注册或页面结构后先跑它。
 
-0.5.1–0.5.12 新增的覆盖面：
+0.5.1–0.5.20 新增的覆盖面：
 
 - **弹窗焦点**：卡片契约（`role=dialog` + `aria-modal` + `tabIndex -1`）、`data-mo-focus` 唯一、Tab/Shift+Tab **手动步进**与两端循环、焦点在卡片外时回拉、隐藏控件被跳过、Escape 关窗；
-- **新建供应商**：缺模型时**零写盘**并给文案、`从网关获取` 会填 id、一次 mutate 同时带 `models` 与 `apiKeyEnv`；
+- **新建供应商**：缺模型时**零写盘**并给文案、`获取可用模型` 弹勾选箱（点「添加所选」才进清单）、一次 mutate 同时带 `models` 与 `apiKeyEnv`；
 - **删除**：供应商删除必须**先确认**（取消不写盘）、确认后 `unset providers.<route>` + 清派生凭据、模型删除写回剩余列表；
 - **测试连接**：请求必须带 `baseURL`、点击**同帧**起转（`dsh-mo-act-busy` + `dsh-mo-spin`）、busy 图标是 `loading`、≥450ms 后落到结论、结论把图标换成 `check`/`warn`；
-- **图标与布局**：图标来自 primitives 桩（断言 `data-icon`）；三颗图标键同一个盒子（19×17）；删除键红框、测试连接键浅底；悬停规则、开关光环与基线对齐（`alignSelf: center`）；悬停文案 ≤16 字、结论 ≤18 字。
+- **图标与布局**：图标来自 primitives 桩（断言 `data-icon`）；三颗图标键同一个盒子（19×17）；删除键红框、测试连接键浅底；悬停规则、开关光环与基线对齐（`alignSelf: center`）；悬停文案 ≤16 字、结论 ≤18 字；
+- **目录回退**：配置里没列模型的路由，回退发现必须带上它的 `baseURL`（宿主对目录外的路由缺地址会直接拒绝）。
 
 ### 0.4.0 验证范围
 
@@ -374,7 +237,7 @@ node test/smoke.mjs        # 或 npm test
 1. **供应商行左侧的行图标 —— 已否决，不做**。当初的设想是给每条供应商行加一个**供应商 logo / 品牌图标**帮助辨识；结论是不做：这些图标只能按路由名去猜，猜不到就是随机图形，反而比纯文字更乱，而行首的绿点已经承担了"启用/停用"这个唯一有意义的视觉信号。（若哪天真要做，名字表是现成的：0.5.8 核对过 primitives 的 98 个图标，取不到时 `icon()` 返回 null、`kitIcon()` 有文字兜底。）
 2. **每模型行的操作图标 —— 已定（0.5.0）**：模型行改成整行单击开「模型详情」弹窗，行上不再挂「链接 / 铅笔 / 垃圾桶」三枚图标，删除收进弹窗。（0.5.4 之后行尾只保留「测试连接 + 删除」两枚，理由是这两个是高频动作。）
 3. **每模型 / 每供应商开关 —— 已定（0.5.0）**：pi-ai 的 `modelFields` 与 profile 都**没有** enabled/disabled 字段，所以开关落在插件侧存储（`dsh-model-organizer.hiddenProviders` / `.hiddenModels`），语义只有「从本插件的菜单里移除」；表现统一成每行左侧的绿点。
-4. **顶部「+ 添加供应商」—— 已做（0.5.0 起，0.5.3 补上模型必填）**：一次 mutate 同时写 profile（baseURL/api/models）与凭据引用（`deriveKeyRef`），路由重名与字符集在写之前拦；模型 ID 必填（宿主对目录外的路由硬要求），可「从网关获取」自动填。
+4. **顶部「+ 添加供应商」—— 已做（0.5.0 起，0.5.3 补上模型必填）**：一次 mutate 同时写 profile（baseURL/api/models）与凭据引用（`deriveKeyRef`），路由重名与字符集在写之前拦；模型 ID 必填（宿主对目录外的路由硬要求），可「获取可用模型」勾选后自动填。
 5. **顶部右侧「切回官方页」开关 —— 已做**：本页页头右侧的「官方模型页」按钮就是它，动作是 `setTakeover(false)`（只对这一次打开设置有效）。
 
 已对齐截图的部分：两栏主从布局、供应商分组（官方目录 / 自定义供应商，来自 `remote.llm.listConfigurableProviders`）、API 地址 / API 格式 / API 密钥三行、模型列表的增删改与拖拽、浮窗同款的悬停与抓握光标、模型列表标题右侧的「获取可用模型」（`remote.llm.discoverModels`）—— 交互与官方一致：**弹窗勾选**，只列配置里还没有的模型、默认全选、可搜索与全选/取消全选，**取消/关闭都不写配置**，只有「添加所选」才落盘，以及**模型显示名**的处理（0.4.0 不写 `name` 字段、宿主回退到 id；0.5.0 起在「模型详情」弹窗里可以直接填显示名，保存时写进该模型的 `name`）。
