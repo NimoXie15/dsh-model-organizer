@@ -127,6 +127,23 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 - **开关（`role="switch"`）显式排除**：它的底色就是开/关状态，悬停改底色会被误读成状态切换，只加 `box-shadow` 光环；
 - 关闭键（`data-mo$="-close"`）悬停时把图标提到 `label-primary`，否则只变底色看不出来。
 
+## 0.5.21：改了推理等级，下一次发送就生效
+
+**现象**：给模型改推理等级（或切回「继承」）后，当前对话仍然报错，必须切到别的模型再切回来才恢复。
+
+**原因**（官方机制，不是配置问题）：会话把「选了哪个等级」作为 `model/selection` 事件钉住（v3 投影 `modelSelection`，`next = pending ?? lastUsed`）；每轮请求都用它，`dsh-llm` 的 `resolveCallWithInfo()` 再按模型**当前**声明的 `efforts[].id` 校验，不在列表就抛 `UNSUPPORTED_REASONING_EFFORT`，**不 clamp、不回退**。设置页改的是模型声明，没有任何代码去改写会话里的旧钉。于是：改「值」下一次发送即生效（键还在）；删「键」（含继承）则每轮失败。
+
+**做法**（插件侧自动修复，不用按钮）：`createReasoningRepair()` 监听两个触发点——模型能力更新（`remote.$on("llm/models-updated")`）与会话列表变化（`sessions.list.subscribe`），去重后扫描**主视图会话**（`sessions.retainInfo(id).retainedBy.mainView > 0`）；读取 `binding.session.projections.faceOf("modelSelection")` 的 `next`，若它的 `reasoningEffort` 已不被该模型声明支持，就调用官方 `remote.session.selectModel({sessionId, provider, model})`——**不带 effort**，路由不变，下一次发送回退到模型默认等级。正在生成的那一轮用的是已经记录的 `request/header`，不受影响。
+
+**边界与取舍**：
+
+- 只修**主视图**会话；后台会话等用户打开时再修（避免静默改写看不见的状态）；
+- 官方 `selectModel` 会顺带保存一次「默认模型选择」（`agentDefaultModel.saveSelection`），这是它的既有行为；修复只针对用户正在看的会话，所以影响面最小；
+- 被另一个 DSH 实例持锁的会话会返回 `session/writer-held`：记一条 warn、跳过，不重试风暴（同一键 4s 冷却）；
+- 不碰仍在声明里的等级：`high` 还在时只改 wire 值，下一轮直接生效，不会重写会话。
+
+**验证**（`test/smoke.mjs`）：等级仍被声明 → 零写入；删掉等级 → 恰好一次 `selectModel` 且不带 effort；修过之后再次扫描 → 不再写；后台会话 → 不写、成为主视图后才写；页面内保存模型 → 立即触发一次修复（不等宿主事件）；写失败（writer-held）→ 吞掉不抛。反向对照：去掉桥接 / 事件订阅 / 保存触发 / 主视图守卫 / 把 effort 带回去，五种都会让测试失败。
+
 ## 已知的非插件告警：permission preset "auto"（会连带「权限选择消失」和「工具通道断」）
 
 ```

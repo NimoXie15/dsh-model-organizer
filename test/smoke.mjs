@@ -179,6 +179,14 @@ const dictionaries = {};
 const mutations = [];
 const credentialWrites = [];
 const credentialClears = [];
+/* Reasoning-repair fixtures: sessions pin their selection through the modelSelection
+   projection, exactly like the shipped composer reads it. */
+const pinnedSelections = new Map();
+const mainViewSessions = new Set();
+const selectModelCalls = [];
+const sessionListListeners = new Set();
+const remoteEventHandlers = new Map();
+const modelCatalog = { groups: [] };
 const discovered = [];
 const directory = { describe: async (refs) => ({ ok: true, value: Object.fromEntries(refs.map((ref) => [ref, { configured: ref === "GATEWAYA_API_KEY", writable: true }])) }) };
 const storeFace = { subscribe: () => () => {}, getSnapshot: () => snapshot, ensure() {} };
@@ -202,6 +210,23 @@ const scope = {
   configForms: { describe: () => storeFace },
   settingsScope: { describe: () => storeFace },
   remote: {
+    /* The repair path: capability lookup + the official selection write. */
+    $on: (event, handler) => {
+      if (!remoteEventHandlers.has(event)) remoteEventHandlers.set(event, new Set());
+      remoteEventHandlers.get(event).add(handler);
+      return () => { const set = remoteEventHandlers.get(event); if (set) set.delete(handler); };
+    },
+    session: {
+      modelCatalog: async () => ({ ok: true, value: modelCatalog }),
+      selectModel: async (request) => {
+        selectModelCalls.push(request);
+        pinnedSelections.set(request.sessionId, Object.assign(
+          { provider: request.provider, model: request.model },
+          request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }
+        ));
+        return { ok: true, value: {} };
+      }
+    },
     /* The plugin wraps the namespace in its own mutate(ops, revision) face, so the
        host call is (namespace, ops, revision) — record it the same way. */
     settings: { mutate: async (ns, ops, revision) => { mutations.push({ ns, ops, revision }); return { ok: true }; } },
@@ -239,7 +264,23 @@ const scope = {
     }
   },
   modelDirectories: { directoryFor: () => ({ store: scope.settingsScope.describe(), load: async () => {}, select: async () => ({ ok: true }) }) },
-  sessions: { subagentAddress: () => undefined },
+  sessions: {
+    subagentAddress: () => undefined,
+    /* The client Session service: `list` feeds the repair sweep, `binding` exposes the
+       modelSelection projection, `retainInfo` distinguishes the visible conversation. */
+    list: {
+      getSnapshot: () => ({
+        phase: "ready",
+        ids: [...pinnedSelections.keys()],
+        byId: Object.fromEntries([...pinnedSelections.keys()].map((id) => [id, { id }]))
+      }),
+      subscribe: (fn) => { sessionListListeners.add(fn); return () => sessionListListeners.delete(fn); }
+    },
+    binding: (id) => ({
+      session: { projections: { faceOf: () => ({ getSnapshot: () => ({ next: pinnedSelections.get(id) }) }) } }
+    }),
+    retainInfo: (id) => ({ getSnapshot: () => ({ retainedBy: { mainView: mainViewSessions.has(id) ? 1 : 0 } }) })
+  },
   logger: { warn: () => {}, info: () => {} }
 };
 const bind = (ns) => (key, params) => {
@@ -1294,6 +1335,97 @@ expect(testHints.every((hint) => typeof hint === "string" && hint.length > 0 && 
   collect(tree, byAttr("add-cancel"))[0].props.onClick();
 }
 
+/* ---- reasoning selection repair --------------------------------------------
+   A Session pins its effort (`model/selection`). Editing a model's reasoningEfforts
+   changes the declaration, not the pin; DSH then rejects every later send with
+   UNSUPPORTED_REASONING_EFFORT. The plugin repairs the pin through the official
+   selectModel path (route only), so the next send falls back to the model default —
+   no model re-selection, and the turn already in flight is untouched. */
+{
+  const emit = function (event) {
+    const set = remoteEventHandlers.get(event);
+    if (set) for (const handler of [...set]) handler();
+  };
+  const flush = async function () { await tick(); await tick(); };
+  const reset = function () {
+    pinnedSelections.clear();
+    mainViewSessions.clear();
+    selectModelCalls.length = 0;
+  };
+  /* The section face must hand the page a repairable bridge. */
+  const faceProps = section().opts.inject();
+  expect(typeof faceProps.bridge.reasoningRepair === "function",
+    "the page must receive the reasoning-repair trigger");
+  reset();
+  modelCatalog.groups = [
+    { id: "gatewayA", models: [{ id: "glm-4.6", reasoning: { efforts: [{ id: "high", name: "High" }] } }] }
+  ];
+  pinnedSelections.set("s-live", { provider: "gatewayA", model: "glm-4.6", reasoningEffort: "high" });
+  mainViewSessions.add("s-live");
+
+  /* The model still declares the level: no repair may touch the Session. */
+  emit("llm/models-updated");
+  await flush();
+  expect(selectModelCalls.length === 0,
+    "a pinned level the model still declares must never be rewritten");
+
+  /* The level disappeared (inherit / renamed): repair to the default without an effort. */
+  modelCatalog.groups = [{ id: "gatewayA", models: [{ id: "glm-4.6" }] }];
+  emit("llm/models-updated");
+  await flush();
+  expect(selectModelCalls.length === 1,
+    "a stale pinned level must be repaired, got " + selectModelCalls.length);
+  const repair = selectModelCalls[0] || {};
+  expect(repair.sessionId === "s-live" && repair.provider === "gatewayA" && repair.model === "glm-4.6"
+    && repair.reasoningEffort === undefined,
+    "the repair keeps the route and drops only the level, got " + JSON.stringify(repair));
+
+  /* The repaired selection is clean: another sweep is a no-op. */
+  emit("llm/models-updated");
+  await flush();
+  expect(selectModelCalls.length === 1, "a repaired Session must not be written twice");
+
+  /* Background Sessions are repaired only when they become the main view. */
+  pinnedSelections.set("s-background", { provider: "gatewayA", model: "glm-4.6", reasoningEffort: "high" });
+  emit("llm/models-updated");
+  await flush();
+  expect(selectModelCalls.length === 1,
+    "a background Session must not be rewritten silently, got " + selectModelCalls.length);
+  mainViewSessions.add("s-background");
+  for (const listener of [...sessionListListeners]) listener();
+  await flush();
+  expect(selectModelCalls.length === 2 && selectModelCalls[1].sessionId === "s-background",
+    "opening a Session that still holds a stale level must repair it, got " + JSON.stringify(selectModelCalls));
+
+  /* A refused write (another DSH instance owns the Session) is logged and skipped. */
+  reset();
+  pinnedSelections.set("s-held", { provider: "gatewayA", model: "glm-4.6", reasoningEffort: "high" });
+  mainViewSessions.add("s-held");
+  const officialSelect = scope.remote.session.selectModel;
+  scope.remote.session.selectModel = async () => ({ ok: false, error: { code: "session/writer-held", message: "held" } });
+  emit("llm/models-updated");
+  await flush();
+  scope.remote.session.selectModel = officialSelect;
+  expect(selectModelCalls.length === 0, "a refused repair must be swallowed, not counted as a write");
+
+  /* Saving models in this page asks for a sweep immediately; it must not wait for the
+     host's models-updated event (the user's own edit is the common path). */
+  reset();
+  pinnedSelections.set("s-save", { provider: "gatewayA", model: "glm-4.6", reasoningEffort: "high" });
+  mainViewSessions.add("s-save");
+  modelCatalog.groups = [{ id: "gatewayA", models: [{ id: "glm-4.6" }] }];
+  snapshot = { view: { writable: true, revision: 12, namespaces: [{ ns: "llm-pi-ai", revision: 12, value: { providers: { gatewayA: providerA } } }] } };
+  if (typeof tree === "undefined") tree = render();
+  tree = render();
+  await tick();
+  tree = render();
+  collect(tree, byAttr("page-model-delete"))[0].props.onClick({ stopPropagation() {} });
+  await flush();
+  expect(selectModelCalls.some((call) => call.sessionId === "s-save"),
+    "saving a model in this page must repair a stale pin without waiting for the host event");
+  reset();
+}
+
 officialPriority = -5;   /* the shipped entry may sit anywhere; ours must be relative */
 const restarts = [];
 const restartScope = Object.assign({}, scope, {
@@ -1316,5 +1448,5 @@ if (failures.length > 0) {
   console.error("FAIL\n - " + failures.join("\n - "));
   process.exitCode = 1;
 } else {
-  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified");
+  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified");
 }
