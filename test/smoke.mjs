@@ -1426,6 +1426,53 @@ expect(testHints.every((hint) => typeof hint === "string" && hint.length > 0 && 
   reset();
 }
 
+/* ---- per-model effort memory (composer) ------------------------------------
+   DSH keeps one selection per Session, so picking a model drops its effort; this
+   menu remembers the level per route/model instead, and drops it when the level is
+   gone or the model stops declaring it. */
+{
+  const t = plugin.__test;
+  expect(typeof t.effortForModel === "function" && typeof t.pickEffortFor === "function"
+    && typeof t.readEffortMemory === "function" && typeof t.writeEffortMemory === "function",
+    "the effort-memory helpers must be exposed to the harness");
+  expect(t.effortMemoryKey("llm-pi-ai/gatewayA", "glm-4.6") === "gatewayA/glm-4.6",
+    "memory keys must be namespace-free, like the other local keys");
+
+  const model = { id: "glm-4.6", reasoning: { efforts: [{ id: "low" }, { id: "high" }], defaultEffort: "high" } };
+  expect(t.effortForModel({ "gatewayA/glm-4.6": "low" }, "gatewayA", model).effort === "low",
+    "a remembered level the model still declares must be restored");
+  const stale = t.effortForModel({ "gatewayA/glm-4.6": "max" }, "gatewayA", model);
+  expect(stale.stale === true && stale.effort === undefined,
+    "a remembered level the model no longer declares must be dropped");
+
+  expect(t.pickEffortFor({ "gatewayA/glm-4.6": "low" }, "gatewayA", model,
+    { provider: "gatewayA", model: "glm-4.6", reasoningEffort: "high" }).effort === "high",
+    "re-picking the current model keeps the live level");
+  expect(t.pickEffortFor({ "gatewayA/glm-4.6": "low" }, "gatewayA", model,
+    { provider: "gatewayA", model: "other" }).effort === "low",
+    "switching back must restore the remembered level");
+  expect(t.pickEffortFor({ "gatewayA/glm-4.6": null }, "gatewayA", model, null).effort === undefined,
+    "an explicit Default must stay Default");
+  expect(t.pickEffortFor({}, "gatewayA", model, null).effort === "high",
+    "without memory the model default applies");
+  expect(t.pickEffortFor({ "gatewayA/glm-4.6": "max" }, "gatewayA", model, null).effort === "high",
+    "a stale remembered level falls back to the model default");
+
+  const remembered = t.rememberEffortIn({}, "gatewayA", model, "low");
+  expect(remembered["gatewayA/glm-4.6"] === "low",
+    "choosing a level must be written to the memory");
+  expect(t.rememberEffortIn(remembered, "gatewayA", model, undefined)["gatewayA/glm-4.6"] === null,
+    "choosing Default must be remembered as an explicit default");
+
+  t.writeEffortMemory({ "gatewayA/glm-4.6": "low", "gatewayA/glm-4.6~default": null });
+  const roundTrip = t.readEffortMemory();
+  expect(roundTrip["gatewayA/glm-4.6"] === "low" && roundTrip["gatewayA/glm-4.6~default"] === null,
+    "the memory must round-trip through localStorage");
+  store.set("dsh-model-organizer.effortByModel", "{not json");
+  expect(Object.keys(t.readEffortMemory()).length === 0, "broken JSON in the memory key must not throw");
+  store.delete("dsh-model-organizer.effortByModel");
+}
+
 officialPriority = -5;   /* the shipped entry may sit anywhere; ours must be relative */
 const restarts = [];
 const restartScope = Object.assign({}, scope, {
@@ -1448,5 +1495,5 @@ if (failures.length > 0) {
   console.error("FAIL\n - " + failures.join("\n - "));
   process.exitCode = 1;
 } else {
-  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified");
+  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified");
 }

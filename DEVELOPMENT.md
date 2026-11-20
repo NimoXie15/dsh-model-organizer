@@ -144,6 +144,16 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 
 **验证**（`test/smoke.mjs`）：等级仍被声明 → 零写入；删掉等级 → 恰好一次 `selectModel` 且不带 effort；修过之后再次扫描 → 不再写；后台会话 → 不写、成为主视图后才写；页面内保存模型 → 立即触发一次修复（不等宿主事件）；写失败（writer-held）→ 吞掉不抛。反向对照：去掉桥接 / 事件订阅 / 保存触发 / 主视图守卫 / 把 effort 带回去，五种都会让测试失败。
 
+## 0.5.22：按模型记住推理等级（本机）
+
+**问题**：DSH 每个会话只保存一条 `modelSelection`；选模型时菜单只提交 `{provider, model}`，所以切走再切回一定从该模型的默认等级开始。官方菜单同样如此——这不是插件的 bug，是会话模型选择的既有语义。
+
+**做法**：本插件的输入框菜单在 `localStorage` 的 `dsh-model-organizer.effortByModel` 里记 `路由/模型 → 等级`（`null` = 用户明确选过 Default）。`pickEffortFor()` 决定一次选择提交什么：同模型保留当前等级；换模型时用记忆，记忆中的等级已不在当前 `reasoning.efforts` 里就丢弃并回退默认；`chooseEffort()` **成功之后**才写入记忆。只影响本插件渲染的菜单，官方菜单与其它客户端不受影响。
+
+**边界**：记忆跟浏览器走，不跨设备；新会话由宿主自动选默认模型、不经过菜单，所以不套用记忆；恢复前一定校验等级仍在声明里（与推理等级自动修复同一套判断）。
+
+**验证**：`__test` 暴露 `effortForModel` / `pickEffortFor` / `rememberEffortIn` / 读写函数；冒烟覆盖「记忆恢复」「失效丢弃」「Default 显式记忆」「无记忆回退默认」「localStorage 往返」「坏 JSON 容错」。反向对照：忽略记忆 / 不校验失效 / Default 不记，三组都会让测试失败。
+
 ## 已知的非插件告警：permission preset "auto"（会连带「权限选择消失」和「工具通道断」）
 
 ```
