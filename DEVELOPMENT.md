@@ -154,6 +154,16 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 
 **验证**：`__test` 暴露 `effortForModel` / `pickEffortFor` / `rememberEffortIn` / 读写函数；冒烟覆盖「记忆恢复」「失效丢弃」「Default 显式记忆」「无记忆回退默认」「localStorage 往返」「坏 JSON 容错」。反向对照：忽略记忆 / 不校验失效 / Default 不记，三组都会让测试失败。
 
+## 0.5.23：记住供应商分组的展开状态（本机）
+
+**问题**：输入框菜单里的供应商分组展开状态只存在组件 `useState` 里——关掉菜单再开还在（组件没卸载），但刷新/换会话就回到「只展开当前供应商」。
+
+**做法**：`localStorage` 的 `dsh-model-organizer.expandedGroups` 存 `供应商 ID → true/false`，**只存显式选择**。`groupOpenIn(memory, groupId, currentProvider)` 的规则：有记录按记录；没有记录时，当前模型所在供应商默认展开、其它默认收起（保持原有观感）。`toggleGroup()` 写入；**搜索期间不切换也不写入**，因为搜索会把所有分组强制展开，那是临时视图而不是用户选择。`useState(readExpandedGroups)` 只在挂载时读一次。
+
+**边界**：分组被删掉后留下的旧键无害（下次切换会带上，但不会渲染）；记忆跟浏览器走，不跨设备；只影响本插件菜单，官方菜单没有这个分组层。
+
+**验证**：冒烟覆盖「无记忆时当前供应商展开」「其它分组收起」「显式折叠优先」「显式展开恢复」「只持久化布尔值」「坏 JSON 容错」。反向对照：不默认展开当前供应商 / 忽略显式折叠 / 不写存储，三组都会失败。
+
 ## 已知的非插件告警：permission preset "auto"（会连带「权限选择消失」和「工具通道断」）
 
 ```

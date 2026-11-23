@@ -1473,6 +1473,31 @@ expect(testHints.every((hint) => typeof hint === "string" && hint.length > 0 && 
   store.delete("dsh-model-organizer.effortByModel");
 }
 
+/* ---- remembered provider-group expansion (composer) -----------------------
+   Explicit open/closed choices are stored per browser; without one the current
+   provider opens and every other group stays closed; search is view-only. */
+{
+  const t = plugin.__test;
+  expect(typeof t.groupOpenIn === "function" && typeof t.readExpandedGroups === "function"
+    && typeof t.writeExpandedGroups === "function",
+    "the group-expansion helpers must be exposed to the harness");
+  expect(t.groupOpenIn({}, "gatewayA", "gatewayA") === true,
+    "without a stored choice the current provider must open");
+  expect(t.groupOpenIn({}, "presetA", "gatewayA") === false,
+    "without a stored choice other groups must stay closed");
+  expect(t.groupOpenIn({ gatewayA: false }, "gatewayA", "gatewayA") === false,
+    "an explicit collapse must win over the current-provider default");
+  expect(t.groupOpenIn({ presetA: true }, "presetA", "gatewayA") === true,
+    "an explicit expansion must be restored");
+  t.writeExpandedGroups({ gatewayA: false, presetA: true, junk: 1 });
+  const read = t.readExpandedGroups();
+  expect(read.gatewayA === false && read.presetA === true && read.junk === undefined,
+    "only boolean choices may be persisted, got " + JSON.stringify(read));
+  store.set("dsh-model-organizer.expandedGroups", "{bad");
+  expect(Object.keys(t.readExpandedGroups()).length === 0, "broken JSON in the expansion key must not throw");
+  store.delete("dsh-model-organizer.expandedGroups");
+}
+
 officialPriority = -5;   /* the shipped entry may sit anywhere; ours must be relative */
 const restarts = [];
 const restartScope = Object.assign({}, scope, {
@@ -1495,5 +1520,5 @@ if (failures.length > 0) {
   console.error("FAIL\n - " + failures.join("\n - "));
   process.exitCode = 1;
 } else {
-  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified");
+  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified, group expansion memory verified");
 }
