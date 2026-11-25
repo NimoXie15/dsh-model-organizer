@@ -436,46 +436,55 @@ expect(apiOfficialRow.props.draggable !== true && typeof apiOfficialRow.props.on
   "a built-in route must not be draggable: its order is the shipped one");
 expect(String(accountOfficialRow.props.title).indexOf("官方模型页") !== -1,
   "the account row must say where it is edited");
-/* Neither row draws a trailing arrow any more; the badge itself is the handoff
-   button, so the row can select without navigating. */
+/* The rows no longer draw a badge or a trailing arrow: they show the model count
+   like every third-party provider. The badge lives in the detail header. */
 const arrowSpans = (row) => collect(row, (node) => node.type === "span" && (node.props.children === "›" || node.props.children === "↗"));
 expect(arrowSpans(apiOfficialRow).length === 0 && arrowSpans(accountOfficialRow).length === 0,
   "official rows must not carry the old trailing arrow glyph");
-expect(collect(apiOfficialRow, byAttr("official-open")).length === 1
-  && collect(accountOfficialRow, byAttr("official-open")).length === 1,
-  "each official row needs the small Official handoff button");
+expect(collect(apiOfficialRow, byAttr("official-open")).length === 0
+  && collect(accountOfficialRow, byAttr("official-open")).length === 0,
+  "the handoff button must not live in the rail rows any more");
+const apiStyle = JSON.stringify(apiOfficialRow.props.style);
+const accountStyle = JSON.stringify(accountOfficialRow.props.style);
+expect(flattenText(apiOfficialRow).join(" ").indexOf("2 个模型") !== -1
+  && flattenText(accountOfficialRow).join(" ").indexOf("个模型") !== -1,
+  "both official rows must show a model count");
 const takeoverCalls = [];
 let officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
 const clickedApi = collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-official")[0];
 clickedApi.props.onClick();
 expect(takeoverCalls.length === 0, "an editable built-in route must not hand the row back");
 officialTree = render();
+const apiRowAfter = collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-official")[0];
+expect(JSON.stringify(apiRowAfter.props.style) === apiStyle, "selecting the API-key row must not repaint it");
 expect(collect(officialTree, byAttr("official-detail")).length === 1, "clicking it must render the namespace editor");
 expect(collect(officialTree, byAttr("official-base-url")).length === 1 && collect(officialTree, byAttr("official-model")).length === 2,
   "the namespace editor must show the endpoint and the stored models");
+officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
+const apiDetailBadge = collect(collect(officialTree, byAttr("official-detail"))[0], byAttr("official-open"))[0];
+expect(apiDetailBadge !== undefined, "the API-key detail header needs the Official handoff button");
+apiDetailBadge.props.onClick({ stopPropagation() {} });
+expect(takeoverCalls.length === 1 && takeoverCalls[0] === false, "the API-key badge must hand the cell back");
 
-/* the account row selects and explains; its badge is what hands the cell back */
+/* the account row selects and explains; its detail badge is what hands the cell back */
 officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
 const clickedAccount = collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-account")[0];
 clickedAccount.props.onClick();
-expect(takeoverCalls.length === 0, "the account row itself must select, not navigate");
+expect(takeoverCalls.length === 1, "the account row itself must select, not navigate");
 officialTree = render();
+const accountRowAfter = collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-account")[0];
+expect(JSON.stringify(accountRowAfter.props.style) === accountStyle, "selecting the account row must not repaint it");
 expect(collect(officialTree, byAttr("official-account-detail")).length === 1,
   "the account row must render its read-only hint pane");
 expect(flattenText(officialTree).join(" ").indexOf("账户登录态") !== -1,
   "the account pane must explain why it is read-only");
+const accountBadge = collect(collect(officialTree, byAttr("official-account-detail"))[0], byAttr("official-open"))[0];
+expect(accountBadge !== undefined, "the account detail header needs the Official handoff button");
 officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
-const accountBadge = collect(collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-account")[0], byAttr("official-open"))[0];
-accountBadge.props.onClick({ stopPropagation() {} });
-expect(takeoverCalls.length === 1 && takeoverCalls[0] === false,
-  "clicking the account badge must hand the cell back (setTakeover(false)), got " + JSON.stringify(takeoverCalls));
-
-/* the same badge is the only handoff on the API-key row */
-officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
-const apiBadge = collect(collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-official")[0], byAttr("official-open"))[0];
-apiBadge.props.onClick({ stopPropagation() {} });
+const accountBadge2 = collect(collect(officialTree, byAttr("official-account-detail"))[0], byAttr("official-open"))[0];
+accountBadge2.props.onClick({ stopPropagation() {} });
 expect(takeoverCalls.length === 2 && takeoverCalls[1] === false,
-  "clicking the API-key badge must hand the cell back, got " + JSON.stringify(takeoverCalls));
+  "clicking the account badge must hand the cell back (setTakeover(false)), got " + JSON.stringify(takeoverCalls));
 
 /* Back to a pi-ai route for the rest of the page checks. */
 
@@ -484,6 +493,7 @@ expect(takeoverCalls.length === 2 && takeoverCalls[1] === false,
    endpoint/key/models at the namespace root; the account route has no namespace and
    keeps the shipped handoff (asserted above). */
 {
+  const officialSnapshot = snapshot;
   tree = render();
   const openOfficial = collect(tree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-official")[0];
   openOfficial.props.onClick();
@@ -497,7 +507,11 @@ expect(takeoverCalls.length === 2 && takeoverCalls[1] === false,
   base.props.onChange({ target: { value: "https://proxy.example.com/anthropic" } });
   tree = render();
   collect(tree, byAttr("official-base-url"))[0].props.onBlur();
+  tree = render();
+  expect(collect(tree, byAttr("page-model-test"))[0].props.disabled === true,
+    "the per-model test must wait while the namespace save is in flight");
   await tick();
+  tree = render();
   const baseWrite = mutations[mutations.length - 1];
   expect(mutations.length === beforeBase + 1 && baseWrite.ns === "llm-deepseek"
     && baseWrite.ops.length === 1 && baseWrite.ops[0].op === "set"
@@ -588,6 +602,25 @@ expect(takeoverCalls.length === 2 && takeoverCalls[1] === false,
   tree = render();
   const railBadge = collect(tree, (node) => node.props && node.props["data-mo"] === "official-open" && node.props["data-mo-id"] === "deepseek-official")[0];
   expect(railBadge !== undefined, "the namespace editor must keep the shipped-page handoff on its rail badge");
+
+  /* The namespace can be absent (host without the settings service). The editor must
+     not pretend a save could work: every control is disabled and the hint says why. */
+  snapshot = { view: { writable: true, revision: 4, namespaces: [
+    { ns: "llm-pi-ai", revision: 4, value: { providers: { gatewayA: providerA } } }
+  ] } };
+  tree = render();
+  await tick();
+  tree = render();
+  collect(tree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-official")[0].props.onClick();
+  tree = render();
+  expect(collect(tree, byAttr("official-base-url"))[0].props.disabled === true,
+    "a built-in route without its namespace must not accept edits");
+  expect(flattenText(tree).join(" ").indexOf("没有可写的设置命名空间") !== -1,
+    "the missing namespace must be explained on the pane");
+  snapshot = officialSnapshot;
+  tree = render();
+  await tick();
+  tree = render();
 
   /* Back to the pi-ai route for the blocks below. */
   tree = render();
@@ -1691,6 +1724,13 @@ expect(testHints.every((hint) => typeof hint === "string" && hint.length > 0 && 
   expect(emptyThrew, "an empty adapter listing must surface as a failed check, not a missing model");
 }
 
+/* malformed entries in a hand-edited config must degrade to a blank row, not throw */
+{
+  const rows = plugin.__test.officialModelRows([null, 42, { id: "deepseek-flash" }]);
+  expect(rows.length === 3 && rows[0].id === "" && rows[1].id === "" && rows[2].id === "deepseek-flash",
+    "officialModelRows must tolerate null/non-object entries: " + JSON.stringify(rows.map((row) => row.id)));
+}
+
 officialPriority = -5;   /* the shipped entry may sit anywhere; ours must be relative */
 const restarts = [];
 const restartScope = Object.assign({}, scope, {
@@ -1713,5 +1753,5 @@ if (failures.length > 0) {
   console.error("FAIL\n - " + failures.join("\n - "));
   process.exitCode = 1;
 } else {
-  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified, group expansion memory verified, built-in route editing verified, official route discovery verified");
+  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified, group expansion memory verified, built-in route editing verified, official route discovery verified, official row counts/badge verified");
 }
