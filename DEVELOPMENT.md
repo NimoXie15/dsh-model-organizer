@@ -173,7 +173,7 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 - `baseURL`：`set`/`unset ["baseURL"]`；留空表示用官方默认端点；
 - 密钥：README 的 `apiKeyEnv`（默认 `DEEPSEEK_API_KEY`）走 `credentials.set/unset`，不写配置；
 - 模型：`set ["models"]`，行结构用官方 schema 的 `inputModalities`；编辑时保留本页不展示的字段（`systemPromptUpdate`、`imagePixelBudget` 等）；
-- 账户路由（`deepseek-account`）没有命名空间：选中后右栏只给提示，交还只由行内的「官方」小按钮触发；
+- 账户路由（`deepseek-account`）没有命名空间：选中后右栏只给提示，交还只由右侧详情头的「官方」小按钮触发；
 - **「测速」由 host 半截补齐**：`lib/index.js` 给 `llm-deepseek` 注册一条 model discovery，回调里调用 `llm.listModels(provider)`——这正是官方适配器自己的密钥检查（官方端点会真的请求 `/models`）；空列表转成错误，避免客户端显示「模型不存在」。重复注册（上游以后自己加）只记一条 warn；
 
 **验证**（`test/smoke.mjs`）：官方行区分可编辑/只读；写入落在 `llm-deepseek` 根而不是 `providers/`；密钥引用正确；新增模型带 `inputModalities`；编辑保留隐藏字段；删除重写列表；账户行选中后展示只读提示、只有「官方」小按钮走 `setTakeover(false)`；host 半截的 discovery 注册、模型透传、空列表报错。反向对照：把账户行判成可编辑 / 写到 pi-ai 命名空间 / 编辑时丢掉隐藏字段，三组都会失败。
@@ -189,10 +189,19 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 - **凭据写入锁定引用**：`saveKey`/`clearKey` 在调用瞬间捕获路由模式与引用，异步返回时即使已经切换路由也不会串写到别的 key；
 - **坏模型条目**：`officialModelRows` 对 `null`/非对象条目降级为空白行，坏配置不会让整页白屏；
 - **可编辑官方行不再套只读样式**：不再用 `opacity: .66` 把可编辑路由画成禁用态（账户行仍保持弱化）；
-- **官方行选中不重绘**：两行都按「未选中」的样式渲染，选中只改 `aria-current`，不再出现「选中后变成第三方行」的观感；
 - **官方行显示模型数**：API Key 路由读 `llm-deepseek` 的 `models` 长度，账户路由读模型目录里的分组数量；「官方」按钮移到右侧详情头（两个详情各一个），行尾不再有按钮/箭头。
 
 **验证**：新增「缺命名空间 → 输入禁用 + 说明」；冒烟全绿；反向对照（去掉 `!officialReady` 禁用 / 去掉测速互斥 / 去掉坏条目守卫）均会让测试失败。
+
+## 0.5.26：官方行恢复选中指示条
+
+0.5.25 把官方行的选中样式整个去掉了（当时只想去掉字体高亮），截图里的蓝色左侧指示条因此消失。这一版把它加回来，但**只加指示条**：
+
+- 选中时 `boxShadow` 的蓝色左条照常出现；
+- 字体/透明度保持原样：API Key 行正常，account 行保持只读灰；account 的弱化从 `opacity` 改为文字颜色，避免把指示条一起压暗；
+- 行内仍然只有名称 + 模型数，没有按钮/箭头；「官方」按钮仍只在右侧详情头。
+
+**验证**：冒烟断言「选中的 API 行/account 行都有 `inset 2px 0 0` 指示条，且 color/opacity 与未选中一致」；反向对照（去掉指示条合并）会让测试失败。
 
 ## 已知的非插件告警：permission preset "auto"（会连带「权限选择消失」和「工具通道断」）
 

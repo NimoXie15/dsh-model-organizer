@@ -456,7 +456,12 @@ clickedApi.props.onClick();
 expect(takeoverCalls.length === 0, "an editable built-in route must not hand the row back");
 officialTree = render();
 const apiRowAfter = collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-official")[0];
-expect(JSON.stringify(apiRowAfter.props.style) === apiStyle, "selecting the API-key row must not repaint it");
+const apiActive = apiRowAfter.props.style || {};
+const apiBase = JSON.parse(apiStyle || "null") || {};
+expect(String(apiActive.boxShadow).indexOf("inset 2px 0 0") !== -1,
+  "the selected API-key row must show the shipped left indicator");
+expect(apiActive.color === apiBase.color && apiActive.opacity === apiBase.opacity,
+  "selecting the API-key row must not change its font style");
 expect(collect(officialTree, byAttr("official-detail")).length === 1, "clicking it must render the namespace editor");
 expect(collect(officialTree, byAttr("official-base-url")).length === 1 && collect(officialTree, byAttr("official-model")).length === 2,
   "the namespace editor must show the endpoint and the stored models");
@@ -473,7 +478,12 @@ clickedAccount.props.onClick();
 expect(takeoverCalls.length === 1, "the account row itself must select, not navigate");
 officialTree = render();
 const accountRowAfter = collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-account")[0];
-expect(JSON.stringify(accountRowAfter.props.style) === accountStyle, "selecting the account row must not repaint it");
+const accountActive = accountRowAfter.props.style || {};
+const accountBase = JSON.parse(accountStyle || "null") || {};
+expect(String(accountActive.boxShadow).indexOf("inset 2px 0 0") !== -1,
+  "the selected account row must show the shipped left indicator");
+expect(accountActive.color === accountBase.color && accountActive.opacity === accountBase.opacity,
+  "selecting the account row must not change its read-only font style");
 expect(collect(officialTree, byAttr("official-account-detail")).length === 1,
   "the account row must render its read-only hint pane");
 expect(flattenText(officialTree).join(" ").indexOf("账户登录态") !== -1,
@@ -1753,5 +1763,5 @@ if (failures.length > 0) {
   console.error("FAIL\n - " + failures.join("\n - "));
   process.exitCode = 1;
 } else {
-  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified, group expansion memory verified, built-in route editing verified, official route discovery verified, official row counts/badge verified");
+  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified, group expansion memory verified, built-in route editing verified, official route discovery verified, official row counts/badge verified, selection indicator verified");
 }
