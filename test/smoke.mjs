@@ -254,7 +254,8 @@ const scope = {
         value: [
           /* No settingsPath: a route the shipped catalog owns. The rail must list it
              read-only, because this page could never edit its settings. */
-          { provider: "deepseek-official", displayName: "DeepSeek 官方", settingsNs: "", declared: true },
+          { provider: "deepseek-official", displayName: "DeepSeek 官方", settingsNs: "llm-deepseek", settingsPath: [], declared: true },
+          { provider: "deepseek-account", displayName: "DeepSeek 账户", settingsNs: "", settingsPath: [], declared: true },
           { provider: "gatewayA", displayName: "gatewayA", settingsNs: "llm-pi-ai", settingsPath: ["providers", "gatewayA"], declared: true },
           { provider: "presetA", displayName: "预设 A", settingsNs: "llm-pi-ai", settingsPath: ["providers", "presetA"], declared: false },
           /* Declared by the shipped catalog, not configured yet: the third-party preset. */
@@ -390,7 +391,13 @@ tree = render();
 expect(flattenText(tree).join(" ").indexOf("还没有配置任何供应商") !== -1, "empty state must render");
 
 const providerC = { displayName: "预设 A", baseURL: "https://catalog-a.example.com/api/paas/v4", api: "openai-completions", apiKeyEnv: "ZHIPU_API_KEY", models: [{ id: "glm-4.5", contextWindow: 128000, input: ["text"] }] };
-snapshot = { view: { writable: true, revision: 4, namespaces: [{ ns: "llm-pi-ai", revision: 4, user: null, value: { providers: { gatewayA: providerA, gatewayB: providerB, presetA: providerC } } }] } };
+snapshot = { view: { writable: true, revision: 4, namespaces: [
+    { ns: "llm-pi-ai", revision: 4, user: null, value: { providers: { gatewayA: providerA, gatewayB: providerB, presetA: providerC } } },
+    { ns: "llm-deepseek", revision: 4, value: { baseURL: "https://api.deepseek.com/anthropic", apiKeyEnv: "DEEPSEEK_API_KEY", models: [
+      { id: "deepseek-flash", name: "DeepSeek-Flash", contextWindow: 1048576, inputModalities: ["text", "image"], systemPromptUpdate: "in-history" },
+      { id: "deepseek-v4-pro", name: "DeepSeek-Pro", contextWindow: 1048576, inputModalities: ["text"] }
+    ] } }
+  ] } };
 store.set("dsh-model-organizer.providerOrder", JSON.stringify(["gatewayA", "gatewayB", "presetA"]));
 /* No unmount simulation here: running the collected effect cleanups would flip the
    page's own liveness flags and the directory answer would be dropped. */
@@ -414,28 +421,182 @@ const railRows = collect(tree, byAttr("page-provider"));
 const officialRows = railRows.filter((row) => row.props["data-mo-official"] === "true");
 const editableRows = railRows.filter((row) => row.props["data-mo-official"] !== "true");
 expect(editableRows.length === 3, "rail must render one editable row per provider, got " + editableRows.length);
-expect(officialRows.length === 1, "the built-in route must render as a read-only rail row, got " + officialRows.length);
+expect(officialRows.length === 2, "both namespace-level routes must render as official rows, got " + officialRows.length);
 
-/* Built-in routes are read-only: no input anywhere inside, not draggable, and a click
-   hands the Models row back to the shipped page instead of pretending to edit it. */
-const officialRow = officialRows[0];
-expect(officialRow.props["data-mo-id"] === "deepseek-official",
-  "the read-only row must carry its route id, got " + String(officialRow.props["data-mo-id"]));
-expect(officialRow.props.role === "button", "the read-only row must still be a button");
-expect(collect(officialRow, (node) => node.type === "input").length === 0,
-  "the read-only row must not hold an input");
-expect(officialRow.props.draggable !== true && typeof officialRow.props.onDragStart !== "function",
+/* The API-key route carries a settings namespace and is editable here; the account
+   route has none and keeps the one-click handoff. Neither is draggable. */
+const apiOfficialRow = officialRows.find((row) => row.props["data-mo-id"] === "deepseek-official");
+const accountOfficialRow = officialRows.find((row) => row.props["data-mo-id"] === "deepseek-account");
+expect(apiOfficialRow !== undefined && accountOfficialRow !== undefined, "both built-in rows must render");
+expect(apiOfficialRow.props["data-mo-editable"] === "true", "the API-key route must be marked editable");
+expect(accountOfficialRow.props["data-mo-editable"] === "false", "the account route must stay read-only");
+expect(collect(accountOfficialRow, (node) => node.type === "input").length === 0,
+  "the read-only account row must not hold an input");
+expect(apiOfficialRow.props.draggable !== true && typeof apiOfficialRow.props.onDragStart !== "function",
   "a built-in route must not be draggable: its order is the shipped one");
-expect(String(officialRow.props.title).indexOf("官方模型页") !== -1, "the read-only row must say where it is edited");
+expect(String(accountOfficialRow.props.title).indexOf("官方模型页") !== -1,
+  "the account row must say where it is edited");
+/* Neither row draws a trailing arrow any more; the badge itself is the handoff
+   button, so the row can select without navigating. */
+const arrowSpans = (row) => collect(row, (node) => node.type === "span" && (node.props.children === "›" || node.props.children === "↗"));
+expect(arrowSpans(apiOfficialRow).length === 0 && arrowSpans(accountOfficialRow).length === 0,
+  "official rows must not carry the old trailing arrow glyph");
+expect(collect(apiOfficialRow, byAttr("official-open")).length === 1
+  && collect(accountOfficialRow, byAttr("official-open")).length === 1,
+  "each official row needs the small Official handoff button");
 const takeoverCalls = [];
-const officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
-const clickedOfficial = collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-official"] === "true")[0];
-expect(clickedOfficial !== undefined, "the read-only row must survive a render");
-clickedOfficial.props.onClick();
+let officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
+const clickedApi = collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-official")[0];
+clickedApi.props.onClick();
+expect(takeoverCalls.length === 0, "an editable built-in route must not hand the row back");
+officialTree = render();
+expect(collect(officialTree, byAttr("official-detail")).length === 1, "clicking it must render the namespace editor");
+expect(collect(officialTree, byAttr("official-base-url")).length === 1 && collect(officialTree, byAttr("official-model")).length === 2,
+  "the namespace editor must show the endpoint and the stored models");
+
+/* the account row selects and explains; its badge is what hands the cell back */
+officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
+const clickedAccount = collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-account")[0];
+clickedAccount.props.onClick();
+expect(takeoverCalls.length === 0, "the account row itself must select, not navigate");
+officialTree = render();
+expect(collect(officialTree, byAttr("official-account-detail")).length === 1,
+  "the account row must render its read-only hint pane");
+expect(flattenText(officialTree).join(" ").indexOf("账户登录态") !== -1,
+  "the account pane must explain why it is read-only");
+officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
+const accountBadge = collect(collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-account")[0], byAttr("official-open"))[0];
+accountBadge.props.onClick({ stopPropagation() {} });
 expect(takeoverCalls.length === 1 && takeoverCalls[0] === false,
-  "clicking a built-in route must hand the row back (setTakeover(false)), got " + JSON.stringify(takeoverCalls));
-expect(collect(clickedOfficial, byAttr("page-provider-dot")).length === 0,
-  "a read-only row keeps the shipped dot, not the plugin's enable dot");
+  "clicking the account badge must hand the cell back (setTakeover(false)), got " + JSON.stringify(takeoverCalls));
+
+/* the same badge is the only handoff on the API-key row */
+officialTree = render({ setTakeover: function (on) { takeoverCalls.push(on); } });
+const apiBadge = collect(collect(officialTree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-official")[0], byAttr("official-open"))[0];
+apiBadge.props.onClick({ stopPropagation() {} });
+expect(takeoverCalls.length === 2 && takeoverCalls[1] === false,
+  "clicking the API-key badge must hand the cell back, got " + JSON.stringify(takeoverCalls));
+
+/* Back to a pi-ai route for the rest of the page checks. */
+
+/* ---- editing a built-in (namespace-level) route ---------------------------
+   The API-key route exposes its own settings namespace, so this page writes
+   endpoint/key/models at the namespace root; the account route has no namespace and
+   keeps the shipped handoff (asserted above). */
+{
+  tree = render();
+  const openOfficial = collect(tree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "deepseek-official")[0];
+  openOfficial.props.onClick();
+  tree = render();
+
+  /* endpoint: namespace root, not providers/<route>/baseURL */
+  const beforeBase = mutations.length;
+  const base = collect(tree, byAttr("official-base-url"))[0];
+  expect(base !== undefined && base.props.value === "https://api.deepseek.com/anthropic",
+    "the namespace editor must load the stored endpoint");
+  base.props.onChange({ target: { value: "https://proxy.example.com/anthropic" } });
+  tree = render();
+  collect(tree, byAttr("official-base-url"))[0].props.onBlur();
+  await tick();
+  const baseWrite = mutations[mutations.length - 1];
+  expect(mutations.length === beforeBase + 1 && baseWrite.ns === "llm-deepseek"
+    && baseWrite.ops.length === 1 && baseWrite.ops[0].op === "set"
+    && baseWrite.ops[0].path.join("/") === "baseURL"
+    && baseWrite.ops[0].value === "https://proxy.example.com/anthropic",
+    "the endpoint must be written at the namespace root: " + JSON.stringify(baseWrite));
+
+  /* key: the namespace's apiKeyEnv (default DEEPSEEK_API_KEY), credentials only */
+  tree = render();
+  collect(tree, byAttr("official-api-key"))[0].props.onChange({ target: { value: "sk-official-1" } });
+  tree = render();
+  const writesBeforeKey = credentialWrites.length;
+  collect(tree, byAttr("official-key-save"))[0].props.onClick();
+  await tick();
+  expect(credentialWrites.length === writesBeforeKey + 1
+    && credentialWrites[credentialWrites.length - 1].ref === "DEEPSEEK_API_KEY"
+    && credentialWrites[credentialWrites.length - 1].value === "sk-official-1",
+    "the built-in key must go to the namespace's credential reference: " + JSON.stringify(credentialWrites.slice(-1)));
+
+  /* add a model: the wire shape is inputModalities, and existing rows are preserved */
+  tree = render();
+  const beforeAdd = mutations.length;
+  collect(tree, byAttr("official-model-add"))[0].props.onClick();
+  tree = render();
+  expect(collect(tree, byAttr("official-model-dialog")).length === 1, "adding a built-in model must open its dialog");
+  collect(tree, byAttr("official-model-id"))[0].props.onChange({ target: { value: "deepseek-new" } });
+  tree = render();
+  collect(tree, byAttr("official-model-name"))[0].props.onChange({ target: { value: "DeepSeek-New" } });
+  tree = render();
+  collect(tree, byAttr("official-model-context"))[0].props.onChange({ target: { value: "64K" } });
+  tree = render();
+  collect(tree, byAttr("official-model-save"))[0].props.onClick();
+  await tick();
+  const addWrite = mutations[mutations.length - 1];
+  expect(mutations.length === beforeAdd + 1 && addWrite.ns === "llm-deepseek"
+    && addWrite.ops[0].op === "set" && addWrite.ops[0].path.join("/") === "models",
+    "adding a model must set the namespace models array: " + JSON.stringify(addWrite));
+  const added = addWrite.ops[0].value;
+  expect(added.length === 3 && added.some((model) => model.id === "deepseek-new"
+    && model.name === "DeepSeek-New" && model.contextWindow === 64000
+    && model.inputModalities.join("+") === "text"),
+    "the new row must be appended with its own fields: " + JSON.stringify(added));
+
+  /* edit an existing row: fields this page does not show must survive the rewrite */
+  tree = render();
+  collect(tree, (node) => node.props && node.props["data-mo"] === "official-model" && node.props["data-mo-id"] === "deepseek-flash")[0].props.onClick();
+  tree = render();
+  const beforeEdit = mutations.length;
+  collect(tree, byAttr("official-model-name"))[0].props.onChange({ target: { value: "DeepSeek-Flash-2" } });
+  tree = render();
+  const vision = collect(tree, byAttr("official-model-vision"))[0];
+  vision.props.onChange({ target: { checked: true } });
+  tree = render();
+  collect(tree, byAttr("official-model-save"))[0].props.onClick();
+  await tick();
+  const editWrite = mutations[mutations.length - 1];
+  const edited = editWrite.ops[0].value.filter((model) => model.id === "deepseek-flash")[0];
+  expect(mutations.length === beforeEdit + 1 && edited !== undefined
+    && edited.name === "DeepSeek-Flash-2" && edited.systemPromptUpdate === "in-history"
+    && edited.inputModalities.join("+") === "text+image",
+    "editing must preserve hidden fields and rewrite the shown ones: " + JSON.stringify(edited));
+
+  /* per-model test: the host half registers discovery for this namespace, so the
+     button asks the official adapter to list its models (its own key check). */
+  tree = render();
+  const beforeTest = discovered.length;
+  const officialTestButton = collect(tree, (node) => node.props && node.props["data-mo"] === "page-model-test" && node.props["data-mo-id"] === "deepseek-flash")[0];
+  expect(officialTestButton !== undefined, "the built-in model row needs its test button");
+  officialTestButton.props.onClick({ stopPropagation() {} });
+  expect(discovered.length === beforeTest + 1
+    && discovered[discovered.length - 1].ns === "llm-deepseek"
+    && discovered[discovered.length - 1].request.provider === "deepseek-official"
+    && discovered[discovered.length - 1].request.baseURL === undefined,
+    "the built-in test must ask its own namespace, provider only: " + JSON.stringify(discovered.slice(-1)));
+  await new Promise((done) => setTimeout(done, 500));
+
+  /* delete a model: same namespace root, one row fewer */
+  tree = render();
+  const beforeDelete = mutations.length;
+  collect(tree, (node) => node.props && node.props["data-mo"] === "official-model-delete" && node.props["data-mo-id"] === "deepseek-flash")[0].props.onClick({ stopPropagation() {} });
+  await tick();
+  const deleteWrite = mutations[mutations.length - 1];
+  expect(mutations.length === beforeDelete + 1 && deleteWrite.ops[0].path.join("/") === "models"
+    && deleteWrite.ops[0].value.every((model) => model.id !== "deepseek-flash"),
+    "deleting must rewrite the models array without that row: " + JSON.stringify(deleteWrite));
+
+  /* the handoff lives on the rail badge, not in the detail header */
+  tree = render();
+  const railBadge = collect(tree, (node) => node.props && node.props["data-mo"] === "official-open" && node.props["data-mo-id"] === "deepseek-official")[0];
+  expect(railBadge !== undefined, "the namespace editor must keep the shipped-page handoff on its rail badge");
+
+  /* Back to the pi-ai route for the blocks below. */
+  tree = render();
+  collect(tree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "gatewayA")[0].props.onClick();
+  tree = render();
+}
+tree = render();
+collect(tree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "gatewayA")[0].props.onClick();
+tree = render();
 
 const draggableRows = editableRows.filter((row) => row.props.draggable === true);
 expect(draggableRows.length === 3, "every editable rail row must be draggable");
@@ -513,6 +674,8 @@ expect(injected.indexOf(":not([role='switch'])") !== -1,
   "the generic hover rule must exclude switches, or hovering would fake a state change");
 expect(injected.indexOf("!important") !== -1,
   "the hover paint must be able to outrank the inline resting paint");
+expect(injected.indexOf("[data-mo='official-open']") !== -1,
+  "the Official badge must get its own hover rule");
 
 /* the switches: plugin-only visibility, stored next to the provider order */
 const editableRailRows = () => collect(tree, byAttr("page-provider")).filter((row) => row.props["data-mo-official"] !== "true");
@@ -687,9 +850,9 @@ const boxOf = (item) => (Array.isArray(item.props.children) ? item.props.childre
 expect(boxOf(items[0]).props.checked === true, "candidates start checked");
 expect(modelIds().join("|") === idsBeforeFetch && mutations.length === writesBeforeFetch, "opening the picker must not touch the list");
 expect(flattenText(tree).join(" ").indexOf("选择要添加的模型") !== -1, "the dialog keeps the shipped wording");
-expect(discovered.length === 1 && discovered[0].ns === "llm-pi-ai" && discovered[0].request.provider === "gatewayA"
-  && discovered[0].request.baseURL === "https://gatewayA.example.com/v1",
-  "fetch must ask the host for the selected route: " + JSON.stringify(discovered[0] || null));
+expect(discovered.length >= 1 && discovered[discovered.length - 1].ns === "llm-pi-ai" && discovered[discovered.length - 1].request.provider === "gatewayA"
+  && discovered[discovered.length - 1].request.baseURL === "https://gatewayA.example.com/v1",
+  "fetch must ask the host for the selected route: " + JSON.stringify(discovered[discovered.length - 1] || null));
 
 /* search filters the candidate list */
 collect(tree, byAttr("fetch-search"))[0].props.onChange({ target: { value: "zzz" } });
@@ -793,7 +956,7 @@ collect(tree, byAttr("page-api-key"))[0].props.onChange({ target: { value: "sk-p
 tree = render();
 collect(tree, byAttr("page-key-save"))[0].props.onClick();
 await tick();
-expect(credentialWrites.length === 1 && credentialWrites[0].ref === "GATEWAYA_API_KEY" && credentialWrites[0].value === "sk-placeholder-1",
+expect(credentialWrites.length >= 1 && credentialWrites[credentialWrites.length - 1].ref === "GATEWAYA_API_KEY" && credentialWrites[credentialWrites.length - 1].value === "sk-placeholder-1",
   "Save key must call credentials.set with the derived reference");
 
 /* The switch semantics, pinned directly: this harness does not render the composer
@@ -1498,6 +1661,36 @@ expect(testHints.every((hint) => typeof hint === "string" && hint.length > 0 && 
   store.delete("dsh-model-organizer.expandedGroups");
 }
 
+/* ---- host half: official route discovery --------------------------------
+   The shipped DeepSeek adapter registers no model discovery, so the client's test
+   button has nothing to call. The host half registers one for the route's settings
+   namespace; it asks the adapter for its model list, which is the adapter's own key
+   check. An empty list must become an error, not a misleading "missing model". */
+{
+  const host = await import(new URL("../lib/index.js", import.meta.url));
+  let registered = null;
+  const models = [{ provider: "deepseek-official", id: "deepseek-flash", name: "DeepSeek-Flash", inputModalities: ["text"] }];
+  const hostCtx = {
+    llm: {
+      registerModelDiscovery(ns, fn) { registered = { ns: ns, fn: fn }; return () => {}; },
+      listModels: async (provider) => models.map((model) => Object.assign({}, model, { provider: provider }))
+    },
+    effect(fn) { const dispose = fn(); return () => { if (typeof dispose === "function") dispose(); }; },
+    logger: { warn() {} }
+  };
+  host.apply(hostCtx);
+  expect(registered !== null && registered.ns === "llm-deepseek",
+    "the host half must register discovery for the official settings namespace");
+  const listed = await registered.fn({ provider: "deepseek-official" });
+  expect(listed.length === 1 && listed[0].id === "deepseek-flash"
+    && listed[0].inputModalities.join("+") === "text",
+    "the host discovery must pass the adapter's model list through: " + JSON.stringify(listed));
+  hostCtx.llm.listModels = async () => [];
+  let emptyThrew = false;
+  try { await registered.fn({ provider: "deepseek-official" }); } catch (error) { emptyThrew = true; }
+  expect(emptyThrew, "an empty adapter listing must surface as a failed check, not a missing model");
+}
+
 officialPriority = -5;   /* the shipped entry may sit anywhere; ours must be relative */
 const restarts = [];
 const restartScope = Object.assign({}, scope, {
@@ -1520,5 +1713,5 @@ if (failures.length > 0) {
   console.error("FAIL\n - " + failures.join("\n - "));
   process.exitCode = 1;
 } else {
-  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified, group expansion memory verified");
+  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified, group expansion memory verified, built-in route editing verified, official route discovery verified");
 }

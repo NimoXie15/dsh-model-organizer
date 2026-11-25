@@ -164,6 +164,22 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 
 **验证**：冒烟覆盖「无记忆时当前供应商展开」「其它分组收起」「显式折叠优先」「显式展开恢复」「只持久化布尔值」「坏 JSON 容错」。反向对照：不默认展开当前供应商 / 忽略显式折叠 / 不写存储，三组都会失败。
 
+## 0.5.24：官方（API Key）路由也能在本页编辑
+
+**背景**：官方 DeepSeek 路由的配置不在 `llm-pi-ai` 的 `providers.<route>` 下，而是一个独立 settings 命名空间（profile 里 `id: llm-deepseek`，`settingsNs: "llm-deepseek"`、`settingsPath: []`，由 `dsh-llm-deepseek-api-key` 注册）。所以 0.5.0 起它只能作为只读行、点击交还官方页。
+
+**0.5.24 做法**：`officialEditable(entry)` 只认 `provider === "deepseek-official"` 且「有非空 `settingsNs` + 空 `settingsPath`」的路由；点这类行不再交还页面，右栏渲染独立编辑器，写的是**命名空间根**：
+
+- `baseURL`：`set`/`unset ["baseURL"]`；留空表示用官方默认端点；
+- 密钥：README 的 `apiKeyEnv`（默认 `DEEPSEEK_API_KEY`）走 `credentials.set/unset`，不写配置；
+- 模型：`set ["models"]`，行结构用官方 schema 的 `inputModalities`；编辑时保留本页不展示的字段（`systemPromptUpdate`、`imagePixelBudget` 等）；
+- 账户路由（`deepseek-account`）没有命名空间：选中后右栏只给提示，交还只由行内的「官方」小按钮触发；
+- **「测速」由 host 半截补齐**：`lib/index.js` 给 `llm-deepseek` 注册一条 model discovery，回调里调用 `llm.listModels(provider)`——这正是官方适配器自己的密钥检查（官方端点会真的请求 `/models`）；空列表转成错误，避免客户端显示「模型不存在」。重复注册（上游以后自己加）只记一条 warn；
+
+**验证**（`test/smoke.mjs`）：官方行区分可编辑/只读；写入落在 `llm-deepseek` 根而不是 `providers/`；密钥引用正确；新增模型带 `inputModalities`；编辑保留隐藏字段；删除重写列表；账户行选中后展示只读提示、只有「官方」小按钮走 `setTakeover(false)`；host 半截的 discovery 注册、模型透传、空列表报错。反向对照：把账户行判成可编辑 / 写到 pi-ai 命名空间 / 编辑时丢掉隐藏字段，三组都会失败。
+
+**边界**：只覆盖 DeepSeek API Key 路由；`thinking`、重试、文件限额等字段仍归官方页。
+
 ## 已知的非插件告警：permission preset "auto"（会连带「权限选择消失」和「工具通道断」）
 
 ```
@@ -251,7 +267,7 @@ node test/smoke.mjs        # 或 npm test
 
 ### 0.5.0 变更与验证范围
 
-- 左栏取数 = `listConfigurableProviders()` 目录 ∪ `llm-pi-ai` 设置文档：官方路由（`settingsPath` 为空）以只读行进入顶部分组「官方（内置）」，点击走 `setTakeover(false)` 回官方模型页；其余按 `entry.declared` 分「官方目录 / 自定义供应商」；
+- 左栏取数 = `listConfigurableProviders()` 目录 ∪ `llm-pi-ai` 设置文档：官方路由（`settingsPath` 为空）进入顶部分组「官方（内置）」；0.5.24 起 API Key 路由就地编辑，账户路由仍走 `setTakeover(false)` 回官方模型页；其余按 `entry.declared` 分「官方目录 / 自定义供应商」；
 - 模型行改成一整行（绿点 + 名称 + 参数摘要）：整行可拖动排序、单击打开「模型详情」弹窗，弹窗内改全部字段并即时写盘，模型区不再有行内输入框与「保存模型」；
 - 每行绿点统一为「启用」（插件侧可见性，配置不动）；供应商行不再拿「配置过 baseURL / 密钥」当绿点含义；
 - 官方模型页浮窗的头部在可排序供应商 < 2 时仍渲染，列表可收起。
