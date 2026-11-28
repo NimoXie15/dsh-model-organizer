@@ -203,6 +203,16 @@ pi-ai 的 profile 与 `modelFields` **都没有 enabled/disabled 字段**，所�
 
 **验证**：冒烟断言「选中的 API 行/account 行都有 `inset 2px 0 0` 指示条，且 color/opacity 与未选中一致」；反向对照（去掉指示条合并）会让测试失败。
 
+## 0.5.27：自定义供应商可改显示名称
+
+**范围**：只对 `directory` 里 `declared === true` 的自定义路由显示「供应商名称」输入；目录自带的供应商名称归目录，账户/官方路由不在此列。
+
+**实现**：输入复用 `field.displayName` + `saveField("displayName")`，写到 `providers.<id>.displayName`；清空走 `unset`，标题回退到路由 ID。标题、左栏行和菜单里的显示名都读同一个 `profileString(profile, "displayName")`，所以保存后立即一致。
+
+**为什么 ID 不可编辑**：路由 ID 是 `providers.<id>` 的 key，也是会话 `modelSelection`、默认模型、`apiKeyEnv` 派生引用的锚点；改 key 需要原子迁移并保留旧引用，且无法自动更新已存在的会话/默认模型。当前只提供名称编辑，ID 仍在创建时确定。
+
+**验证**：冒烟覆盖「自定义行有名称输入」「写入 `providers.gatewayA.displayName`」「清空写 `unset`」「目录路由不渲染名称输入」；反向对照：去掉 `declared` 守卫会让目录行也出现输入，测试失败。
+
 ## 已知的非插件告警：permission preset "auto"（会连带「权限选择消失」和「工具通道断」）
 
 ```

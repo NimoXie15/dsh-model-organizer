@@ -1002,6 +1002,38 @@ await tick();
 expect(credentialWrites.length >= 1 && credentialWrites[credentialWrites.length - 1].ref === "GATEWAYA_API_KEY" && credentialWrites[credentialWrites.length - 1].value === "sk-placeholder-1",
   "Save key must call credentials.set with the derived reference");
 
+/* a hand-declared route gets an editable display name; its id stays fixed */
+tree = render();
+const nameInput = collect(tree, byAttr("page-display-name"))[0];
+expect(nameInput !== undefined, "a custom provider needs an editable display name");
+nameInput.props.onChange({ target: { value: "改名后的网关" } });
+tree = render();
+const nameWrites = mutations.length;
+collect(tree, byAttr("page-display-name"))[0].props.onBlur();
+await tick();
+const nameWrite = mutations[mutations.length - 1];
+expect(mutations.length === nameWrites + 1 && nameWrite.ops.length === 1
+  && nameWrite.ops[0].op === "set" && nameWrite.ops[0].path.join("/") === "providers/gatewayA/displayName"
+  && nameWrite.ops[0].value === "改名后的网关",
+  "the display name must write providers.<route>.displayName: " + JSON.stringify(nameWrite));
+/* clearing it removes the field, so the rail falls back to the route id */
+tree = render();
+collect(tree, byAttr("page-display-name"))[0].props.onChange({ target: { value: "" } });
+tree = render();
+collect(tree, byAttr("page-display-name"))[0].props.onBlur();
+await tick();
+const clearName = mutations[mutations.length - 1];
+expect(clearName.ops[0].op === "unset" && clearName.ops[0].path.join("/") === "providers/gatewayA/displayName",
+  "an empty display name must unset the field: " + JSON.stringify(clearName));
+/* catalog-served routes keep the shipped name: no field */
+tree = render();
+collect(tree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "presetA")[0].props.onClick();
+tree = render();
+expect(collect(tree, byAttr("page-display-name")).length === 0,
+  "a catalog-served route must not expose a display-name editor");
+collect(tree, (node) => node.props && node.props["data-mo"] === "page-provider" && node.props["data-mo-id"] === "gatewayA")[0].props.onClick();
+tree = render();
+
 /* The switch semantics, pinned directly: this harness does not render the composer
    menu, so the pure filter the menu uses is exercised instead. */
 const pickerFilter = plugin.__test && plugin.__test.visibleGroupsFor;
@@ -1763,5 +1795,5 @@ if (failures.length > 0) {
   console.error("FAIL\n - " + failures.join("\n - "));
   process.exitCode = 1;
 } else {
-  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified, group expansion memory verified, built-in route editing verified, official route discovery verified, official row counts/badge verified, selection indicator verified");
+  console.log("smoke: 3 seats, read-only official rows, single-line model rows + details dialog + dialog focus trap, single-mutate model writes, fetch picker, add-provider, panel head with <2 providers, priority handover, settings/credential writes verified, reasoning-level repair verified, per-model effort memory verified, group expansion memory verified, built-in route editing verified, official route discovery verified, official row counts/badge verified, selection indicator verified, provider display-name editing verified");
 }
